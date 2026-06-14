@@ -1,0 +1,13 @@
+services:
+  trading-desk-api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      TDO_ENV: production
+      TDO_DB_PATH: /app/data/trading_desk_os.db
+      TDO_REPORTS_DIR: /app/reports
+      TDO_ADMIN_BOOTSTRAP_KEY: change-this-admin-key
+    volumes:
+      - ./data:/app/data
+      - ./reports:/app/reports

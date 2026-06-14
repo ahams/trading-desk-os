@@ -1,0 +1,336 @@
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
+
+import numpy as np
+import pandas as pd
+
+from catalyst_engine import catalyst_score
+from daily_report_generator import generate_daily_report
+from data_loader import get_info, get_news, get_ohlcv, get_options_chain
+from expected_return_engine import estimate_expected_return
+from fundamentals import fundamental_score
+from game_theory import game_theory_score
+from liquidity import analyze_liquidity
+from market_regime import analyze_market_regime
+from options_engine import options_score
+from scoring import build_thesis, classify, combine_scores, result_row
+from technicals import technical_score, trade_levels
+from theme_engine import analyze_theme, rank_themes
+from utils import clamp
+from config.settings import settings
+from database.store import connect, init_db, utc_now
+
+logger = logging.getLogger("trading_desk.api.analysis")
+
+DEFAULT_WEIGHTS = {
+    "fundamental": 0.16,
+    "technical": 0.22,
+    "liquidity": 0.14,
+    "options": 0.14,
+    "game": 0.15,
+    "catalyst": 0.08,
+    "expectation": 0.11,
+}
+
+MARKET_SYMBOLS = ["SPY", "QQQ", "IWM", "DIA", "TLT", "HYG", "LQD", "UUP", "^VIX", "^TNX"]
+
+
+def _json_safe(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        if np.isnan(obj) or np.isinf(obj):
+            return None
+        return float(obj)
+    if isinstance(obj, (pd.Timestamp, datetime)):
+        return obj.isoformat()
+    if pd.isna(obj) if not isinstance(obj, (str, bytes, list, dict, tuple)) else False:
+        return None
+    return obj
+
+
+def _extract_options_expiry_and_chains(ticker: str):
+    exp, calls, puts = get_options_chain(ticker)
+    return exp, calls, puts
+
+
+def load_market_data(period: str = "1y", interval: str = "1d") -> Dict[str, pd.DataFrame]:
+    out = {}
+    for sym in MARKET_SYMBOLS:
+        try:
+            df = get_ohlcv(sym, period=period, interval=interval)
+            if df is not None and not df.empty:
+                key = sym.replace("^", "")
+                out[key] = df
+                out[sym] = df
+        except Exception as exc:
+            logger.warning("market data failed %s: %s", sym, exc)
+    return out
+
+
+def get_regime(period: str = "1y", interval: str = "1d") -> Dict[str, Any]:
+    market_data = load_market_data(period, interval)
+    try:
+        return _json_safe(analyze_market_regime(market_data))
+    except Exception as exc:
+        logger.exception("regime analysis failed: %s", exc)
+        return {"regime": "UNKNOWN", "total": 50, "flags": [f"Regime failed: {exc}"], "metrics": {}}
+
+
+def analyze_stock(
+    ticker: str,
+    period: str = "1y",
+    interval: str = "1d",
+    account_size: float = 100_000,
+    risk_pct: float = 0.005,
+    regime_result: Optional[dict] = None,
+    market_data: Optional[Dict[str, pd.DataFrame]] = None,
+    include_options: bool = True,
+    persist_signal: bool = True,
+) -> Dict[str, Any]:
+    ticker = ticker.strip().upper().replace(".", "-")
+    df = get_ohlcv(ticker, period=period, interval=interval)
+    if df is None or df.empty or len(df) < 40:
+        return {"ticker": ticker, "error": "Insufficient OHLCV data", "decision": "Avoid", "final_score": 0}
+
+    market_data = market_data or load_market_data(period, interval)
+    regime_result = regime_result or get_regime(period, interval)
+    spy_df = market_data.get("SPY")
+    info = get_info(ticker) or {}
+    news = get_news(ticker) or []
+
+    f_score, f_meta = fundamental_score(info)
+    t_score, t_meta, xdf = technical_score(df, spy_df)
+    l_res = analyze_liquidity(df, info)
+    l_score = float(l_res.get("total", 50))
+    l_meta = l_res.get("metrics", {}) | {k: v for k, v in l_res.items() if k != "metrics"}
+
+    spot = float(df["Close"].iloc[-1])
+    if include_options:
+        exp, calls, puts = _extract_options_expiry_and_chains(ticker)
+        o_score, o_meta = options_score(calls, puts, spot)
+        o_meta["expiry"] = exp
+    else:
+        o_score, o_meta = 50.0, {"options_reasons": ["options disabled"]}
+
+    c_score, c_meta = catalyst_score(news)
+    try:
+        e_score, e_meta = __import__("expectation_engine").expectation_score(info, df, f_meta, {"total": c_score, **c_meta})
+    except Exception as exc:
+        logger.warning("expectation score failed %s: %s", ticker, exc)
+        e_score, e_meta = 50.0, {"expectation_read": "Expectation model unavailable", "expectation_reasons": [str(exc)]}
+
+    try:
+        g_score, g_meta = game_theory_score(t_meta, l_meta, o_meta, info)
+    except Exception as exc:
+        logger.warning("game score failed %s: %s", ticker, exc)
+        g_score, g_meta = 50.0, {"participant_read": "Game theory model unavailable", "flags": [str(exc)]}
+
+    try:
+        theme_meta = analyze_theme(
+            ticker=ticker,
+            stock_df=df,
+            market_data=market_data,
+            news_items=news,
+            sector=info.get("sector"),
+            regime_result=regime_result,
+        )
+    except Exception as exc:
+        logger.warning("theme score failed %s: %s", ticker, exc)
+        theme_meta = {"total": 50, "summary": "Theme unavailable", "metrics": {}}
+
+    scores = {
+        "fundamental": float(f_score),
+        "technical": float(t_score),
+        "liquidity": float(l_score),
+        "options": float(o_score),
+        "game": float(g_score),
+        "catalyst": float(c_score),
+        "expectation": float(e_score),
+    }
+    final_score = combine_scores(scores, DEFAULT_WEIGHTS)
+    decision = classify(final_score, t_meta.get("setup_type", ""))
+    levels = trade_levels(xdf, account_size=account_size, risk_pct=risk_pct)
+
+    er = estimate_expected_return(
+        ticker=ticker,
+        df=df,
+        scores={
+            "final": final_score,
+            "technical": t_score,
+            "liquidity": l_score,
+            "options": o_score,
+            "game": g_score,
+            "catalyst": c_score,
+            "theme": float(theme_meta.get("total", 50)),
+            "expectation": e_score,
+        },
+        metas={"technical": t_meta, "liquidity": l_meta, "options": o_meta, "game": g_meta, "theme": theme_meta, "expectation": e_meta},
+        regime_result=regime_result,
+        account_size=account_size,
+        risk_per_trade=risk_pct,
+    )
+
+    # Prefer more refined expected-return levels if available.
+    er_levels = er.get("levels") or {}
+    for k_src, k_dst in [("entry", "entry"), ("stop", "stop"), ("target1", "target1"), ("target2", "target2")]:
+        if er_levels.get(k_src) is not None:
+            levels[k_dst] = er_levels[k_src]
+    if er_levels.get("risk_reward") is not None:
+        levels["rr"] = er_levels["risk_reward"]
+
+    thesis = build_thesis(ticker, decision, t_meta.get("setup_type", ""), f_meta, t_meta, l_meta, o_meta, g_meta, c_meta, e_meta)
+    row = result_row(ticker, final_score, decision, t_meta.get("setup_type", ""), levels, thesis)
+
+    result = {
+        **row,
+        "price": round(spot, 2),
+        "scores": scores,
+        "expected_return": er.get("expected_return"),
+        "expected_return_pct": er.get("expected_return_pct"),
+        "expected_r": er.get("expected_r"),
+        "probability_win": er.get("probability_win"),
+        "regime": regime_result.get("regime"),
+        "theme": (theme_meta.get("metrics") or {}).get("theme") or theme_meta.get("theme"),
+        "summary": {
+            "fundamental": "; ".join(f_meta.get("fundamental_reasons", [])[:4]),
+            "technical": t_meta.get("setup_type"),
+            "liquidity": l_res.get("summary"),
+            "options": o_meta.get("options_read"),
+            "game_theory": g_meta.get("summary") or g_meta.get("participant_read"),
+            "catalyst": c_meta.get("catalyst_read"),
+            "expectation": e_meta.get("expectation_read"),
+            "expected_return": er.get("summary"),
+        },
+        "metas": {
+            "fundamental": f_meta,
+            "technical": t_meta,
+            "liquidity": l_meta,
+            "options": o_meta,
+            "game": g_meta,
+            "catalyst": c_meta,
+            "expectation": e_meta,
+            "theme": theme_meta,
+        },
+    }
+    safe = _json_safe(result)
+    if persist_signal and not safe.get("error"):
+        save_signal(safe)
+    return safe
+
+
+def save_signal(signal: Dict[str, Any]) -> str:
+    init_db()
+    signal_id = signal.get("signal_id") or f"sig_{signal.get('ticker','NA')}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+    payload = json.dumps(_json_safe(signal), default=str)
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO signals(signal_id, created_at, ticker, decision, setup_type, final_score,
+                expected_return, entry, stop, target1, target2, risk_reward, position_size, regime, theme, thesis, payload_json)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                signal_id,
+                utc_now(),
+                signal.get("ticker"),
+                signal.get("decision"),
+                signal.get("setup_type"),
+                signal.get("final_score"),
+                signal.get("expected_return"),
+                signal.get("entry"),
+                signal.get("stop"),
+                signal.get("target1"),
+                signal.get("target2"),
+                signal.get("rr") or signal.get("risk_reward"),
+                signal.get("position_size"),
+                signal.get("regime"),
+                signal.get("theme"),
+                signal.get("thesis"),
+                payload,
+            ),
+        )
+    return signal_id
+
+
+def scan_tickers(
+    tickers: Iterable[str],
+    period: str = "1y",
+    interval: str = "1d",
+    max_names: int = 50,
+    min_price: float = 1.0,
+    min_avg_dollar_volume: float = 1_000_000,
+    include_options: bool = True,
+) -> Dict[str, Any]:
+    market_data = load_market_data(period, interval)
+    regime = _json_safe(analyze_market_regime(market_data)) if market_data else {"regime": "UNKNOWN"}
+    rows: List[Dict[str, Any]] = []
+    errors: List[Dict[str, str]] = []
+    for ticker in list(tickers)[:max_names]:
+        try:
+            res = analyze_stock(ticker, period, interval, regime_result=regime, market_data=market_data, include_options=include_options)
+            if res.get("error"):
+                errors.append({"ticker": ticker, "error": res["error"]})
+                continue
+            if res.get("price", 0) < min_price:
+                continue
+            avg_dollar = (((res.get("metas", {}).get("liquidity", {}) or {}).get("avg_dollar_vol")) or 0)
+            if avg_dollar and avg_dollar < min_avg_dollar_volume:
+                continue
+            rows.append(res)
+        except Exception as exc:
+            logger.exception("scan failed for %s", ticker)
+            errors.append({"ticker": ticker, "error": str(exc)})
+    rows = sorted(rows, key=lambda r: r.get("final_score", 0), reverse=True)
+    return {"as_of": utc_now(), "regime": regime, "count": len(rows), "results": _json_safe(rows), "errors": errors}
+
+
+def build_daily_report(tickers: Iterable[str], title: str, max_names: int = 50, include_signal_records: bool = True) -> Dict[str, Any]:
+    scan = scan_tickers(tickers, max_names=max_names)
+    rows = scan["results"]
+    market_data = load_market_data()
+    themes_df = None
+    try:
+        # rank pre-defined themes using available market data
+        themes_df = rank_themes(market_data)
+    except Exception as exc:
+        logger.warning("theme ranking failed: %s", exc)
+    report = generate_daily_report(
+        rows,
+        regime=scan.get("regime"),
+        theme_results=themes_df,
+        config={"brand_name": "Trading Desk OS", "report_title": title},
+        output_dir=settings.report_path,
+        db_path=str(settings.db_path),
+        record_signals=include_signal_records,
+        save_files=True,
+        save_sqlite=True,
+    )
+    out = {
+        "report_id": report["report_id"],
+        "report_date": report["report_date"],
+        "executive_summary": report["executive_summary"],
+        "telegram_text": report["telegram_text"],
+        "markdown_text": report["markdown_text"],
+        "html_text": report["html_text"],
+        "paths": report["paths"],
+        "signal_ids": report["signal_ids"],
+        "scanner_count": len(rows),
+    }
+    return _json_safe(out)
+
+
+def recent_signals(limit: int = 100) -> List[Dict[str, Any]]:
+    init_db()
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM signals ORDER BY created_at DESC LIMIT ?", (int(limit),)).fetchall()
+        return [dict(r) for r in rows]
