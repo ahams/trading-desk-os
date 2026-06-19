@@ -27,7 +27,14 @@ from theme_engine import analyze_theme, rank_themes
 from utils import clamp
 from config.settings import settings
 from database.store import connect, init_db, utc_now
-
+try:
+    from engines.trend_quality_engine import analyze_trend_quality
+    from engines.entry_quality_engine import analyze_entry_quality
+    from engines.leadership_engine import analyze_leadership
+except Exception:
+    from trend_quality_engine import analyze_trend_quality
+    from entry_quality_engine import analyze_entry_quality
+    from leadership_engine import analyze_leadership
 logger = logging.getLogger("trading_desk.api.analysis")
 
 DEFAULT_WEIGHTS = {
@@ -180,10 +187,84 @@ def analyze_stock(
     except Exception as exc:
         logger.warning("theme score failed %s: %s", ticker, exc)
         theme_meta = {"total": 50, "summary": "Theme unavailable", "metrics": {}}
+        # ============================================================
+    # Technical v2: Trend + Entry + Leadership
+    # ============================================================
 
+    try:
+        theme_peer_returns = {}
+
+        if isinstance(theme_meta, dict):
+            theme_peer_returns = (
+                (theme_meta.get("metrics") or {}).get("theme_peer_returns")
+                or theme_meta.get("theme_peer_returns")
+                or {}
+            )
+
+        theme_name = (
+            (theme_meta.get("metrics") or {}).get("theme")
+            or theme_meta.get("theme")
+        )
+
+        engine_payload = {
+            "ohlcv": df,
+            "benchmark": spy_df,
+            "sector": None,
+            "theme": theme_name,
+            "theme_peer_returns": theme_peer_returns,
+        }
+
+        trend_meta = analyze_trend_quality(ticker, engine_payload)
+        entry_meta = analyze_entry_quality(ticker, engine_payload)
+        leadership_meta = analyze_leadership(ticker, engine_payload)
+
+        trend_score = float(trend_meta.get("score", 50))
+        entry_score = float(entry_meta.get("score", 50))
+        leadership_score = float(leadership_meta.get("score", 50))
+
+        technical_legacy_score = float(t_score)
+
+        technical_v2_score = round(
+            0.40 * trend_score
+            + 0.30 * entry_score
+            + 0.30 * leadership_score,
+            1,
+        )
+
+    except Exception as exc:
+        logger.warning("technical v2 failed %s: %s", ticker, exc)
+
+        technical_legacy_score = float(t_score)
+        technical_v2_score = float(t_score)
+
+        trend_score = 50.0
+        entry_score = 50.0
+        leadership_score = 50.0
+
+        trend_meta = {"score": 50, "summary": "Trend quality unavailable", "signal": "Unavailable"}
+        entry_meta = {"score": 50, "summary": "Entry quality unavailable", "signal": "Unavailable"}
+        leadership_meta = {"score": 50, "summary": "Leadership unavailable", "signal": "Unavailable"}
+    
+    # scores = {
+    #     "fundamental": float(f_score),
+    #     "technical": float(t_score),
+    #     "liquidity": float(l_score),
+    #     "options": float(o_score),
+    #     "game": float(g_score),
+    #     "catalyst": float(c_score),
+    #     "expectation": float(e_score),
+    #     "merton": float(merton_score),
+    #     "neocloud": float(neocloud_score),
+    # }
+    
     scores = {
         "fundamental": float(f_score),
-        "technical": float(t_score),
+        "technical": float(technical_v2_score),
+        "technical_legacy": float(technical_legacy_score),
+        "trend_quality": float(trend_score),
+        "entry_quality": float(entry_score),
+        "leadership": float(leadership_score),
+        "technical_v2": float(technical_v2_score),
         "liquidity": float(l_score),
         "options": float(o_score),
         "game": float(g_score),
@@ -194,6 +275,14 @@ def analyze_stock(
     }
     final_score = combine_scores(scores, DEFAULT_WEIGHTS)
     decision = classify(final_score, t_meta.get("setup_type", ""))
+    setup_type = t_meta.get("setup_type", "")
+
+    if trend_score >= 75 and leadership_score >= 65 and entry_score < 50:
+        setup_type = "Strong trend / poor entry — wait for pullback or breakout"
+    elif trend_score >= 75 and entry_score >= 60:
+        setup_type = "Trend continuation entry"
+    elif leadership_score >= 75 and entry_score < 50:
+        setup_type = "Leadership name, no clean entry"
     levels = trade_levels(xdf, account_size=account_size, risk_pct=risk_pct)
 
     er = estimate_expected_return(
@@ -201,7 +290,12 @@ def analyze_stock(
         df=df,
         scores={
             "final": final_score,
-            "technical": t_score,
+            # "technical": t_score,
+            "technical": technical_v2_score,
+            "technical_legacy": technical_legacy_score,
+            "trend_quality": trend_score,
+            "entry_quality": entry_score,
+            "leadership": leadership_score,
             "liquidity": l_score,
             "options": o_score,
             "game": g_score,
@@ -225,11 +319,13 @@ def analyze_stock(
     if er_levels.get("risk_reward") is not None:
         levels["rr"] = er_levels["risk_reward"]
 
-    thesis = build_thesis(ticker, decision, t_meta.get("setup_type", ""), f_meta, t_meta, l_meta, o_meta, g_meta, c_meta, e_meta)
+    # thesis = build_thesis(ticker, decision, t_meta.get("setup_type", ""), f_meta, t_meta, l_meta, o_meta, g_meta, c_meta, e_meta)
+    thesis = build_thesis(ticker, decision, setup_type, f_meta, t_meta, l_meta, o_meta, g_meta, c_meta, e_meta)
     thesis += f" Merton credit: {merton_meta.get('signal', 'n/a')} — {merton_meta.get('summary', 'n/a')}"
     if is_neocloud_ticker(ticker, info):
         thesis += f" NeoCloud valuation: {neocloud_meta.get('signal', 'n/a')} — {neocloud_meta.get('summary', 'n/a')}"
-    row = result_row(ticker, final_score, decision, t_meta.get("setup_type", ""), levels, thesis)
+    # row = result_row(ticker, final_score, decision, t_meta.get("setup_type", ""), levels, thesis)
+    row = result_row(ticker, final_score, decision, setup_type, levels, thesis)
 
     result = {
         **row,
@@ -243,7 +339,12 @@ def analyze_stock(
         "theme": (theme_meta.get("metrics") or {}).get("theme") or theme_meta.get("theme"),
         "summary": {
             "fundamental": "; ".join(f_meta.get("fundamental_reasons", [])[:4]),
-            "technical": t_meta.get("setup_type"),
+            # "technical": t_meta.get("setup_type"),    
+            "technical": setup_type,
+            "technical_legacy": t_meta.get("setup_type"),
+            "trend_quality": trend_meta.get("summary"),
+            "entry_quality": entry_meta.get("summary"),
+            "leadership": leadership_meta.get("summary"),
             "liquidity": l_res.get("summary"),
             "options": o_meta.get("options_read"),
             "game_theory": g_meta.get("summary") or g_meta.get("participant_read"),
@@ -264,6 +365,9 @@ def analyze_stock(
             "merton": merton_meta,
             "neocloud": neocloud_meta,
             "theme": theme_meta,
+            "trend_quality": trend_meta,
+            "entry_quality": entry_meta,
+            "leadership": leadership_meta,
         },
     }
     safe = _json_safe(result)
