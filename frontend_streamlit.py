@@ -45,7 +45,7 @@ st.set_page_config(
 # Helpers
 # =============================================================================
 
-DEFAULT_API_URL = os.getenv("TDOS_API_URL", "http://127.0.0.1:8000")
+DEFAULT_API_URL = os.getenv("TDOS_API_URL", "http://127.0.0.1:8080")
 DEFAULT_API_KEY = os.getenv("TDOS_API_KEY", "")
 
 
@@ -195,119 +195,146 @@ def render_trade_plan(data: Dict[str, Any]) -> None:
     c5.metric("Risk/Reward", fmt_num(data.get("rr") or data.get("risk_reward")))
 
 
-def render_analysis_card(data: Dict[str, Any]) -> None:
-    ticker = data.get("ticker", "Ticker")
-    decision = data.get("decision", "n/a")
-    setup = data.get("setup_type") or data.get("setup") or "n/a"
-    regime = data.get("regime", "n/a")
-    theme = data.get("theme", "n/a")
+# def render_analysis_card(data: Dict[str, Any]) -> None:
+#     ticker = data.get("ticker", "Ticker")
+#     decision = data.get("decision", "n/a")
+#     setup = data.get("setup_type") or data.get("setup") or "n/a"
+#     regime = data.get("regime", "n/a")
+#     theme = data.get("theme", "n/a")
 
-    st.markdown(
-        f"""
-        <div style="border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-bottom:14px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <div>
-              <h2 style="margin:0;">{ticker}</h2>
-              <div style="color:#6b7280;">{setup} · Regime: {regime} · Theme: {theme}</div>
-            </div>
-            <div style="background:{decision_color(decision)};color:white;padding:8px 14px;border-radius:999px;font-weight:700;">
-              {decision}
-            </div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+#     st.markdown(
+#         f"""
+#         <div style="border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-bottom:14px;">
+#           <div style="display:flex;justify-content:space-between;align-items:center;">
+#             <div>
+#               <h2 style="margin:0;">{ticker}</h2>
+#               <div style="color:#6b7280;">{setup} · Regime: {regime} · Theme: {theme}</div>
+#             </div>
+#             <div style="background:{decision_color(decision)};color:white;padding:8px 14px;border-radius:999px;font-weight:700;">
+#               {decision}
+#             </div>
+#           </div>
+#         </div>
+#         """,
+#         unsafe_allow_html=True,
+#     )
+
+#     render_trade_plan(data)
+
+#     st.divider()
+
+#     thesis = data.get("final_thesis") or data.get("thesis") or data.get("summary")
+#     if isinstance(thesis, dict):
+#         thesis = thesis.get("final_thesis") or json.dumps(thesis, indent=2)
+#     if thesis:
+#         st.subheader("Desk Thesis")
+#         st.write(thesis)
+
+#     why_not = data.get("why_not_long_now") or data.get("why_not_trade_now") or data.get("invalidating_conditions")
+#     if why_not:
+#         st.subheader("Why not long now / invalidation")
+#         if isinstance(why_not, list):
+#             for item in why_not:
+#                 st.warning(str(item))
+#         else:
+#             st.warning(str(why_not))
+
+#     c1, c2 = st.columns(2)
+#     with c1:
+#         st.subheader("Bull Case")
+#         bull = data.get("main_bull_case") or data.get("bull_case") or data.get("bull")
+#         st.success(bull if bull else "n/a")
+#     with c2:
+#         st.subheader("Bear Case")
+#         bear = data.get("main_bear_case") or data.get("bear_case") or data.get("bear")
+#         st.error(bear if bear else "n/a")
+
+#     st.divider()
+#     scores = data.get("scores", {})
+#     if isinstance(scores, dict) and scores:
+#         st.subheader("Scores")
+#         cols = st.columns(3)
+#         for i, (k, v) in enumerate(scores.items()):
+#             with cols[i % 3]:
+#                 render_score_bar(k.replace("_", " ").title(), v)
+
+#     snapshots = {
+#         "Options Read": data.get("options_read"),
+#         "Game Theory Read": data.get("game_theory_read"),
+#         "Catalyst Read": data.get("catalyst_read"),
+#         "Liquidity Read": data.get("liquidity_read"),
+#         "Technical Read": data.get("technical_read"),
+#         "Expectation Read": data.get("expectation_read"),
+#         "Merton / Capital Structure": data.get("merton_credit"),
+#         "NeoCloud Valuation": data.get("neocloud_valuation"),
+        
+        
+#     }
+#     clean = {k: v for k, v in snapshots.items() if v}
+#     if clean:
+#         st.subheader("Key Reads")
+#         for k, v in clean.items():
+#             st.markdown(f"**{k}:** {v}")
+
+#     with st.expander("Raw response"):
+#         st.json(data)
+
+def render_analysis_card(data: dict):
+    if not isinstance(data, dict):
+        st.warning("No analysis data returned")
+        return
+
+    trade_plan = data.get("trade_plan") or {}
+    expected = data.get("expected_return") or {}
+
+    st.subheader(f"{data.get('ticker', 'N/A')}")
+
+    st.caption(
+        f"{data.get('setup_type', 'n/a')} · "
+        f"Regime: {data.get('regime', 'n/a')} · "
+        f"Theme: {data.get('theme', 'n/a')}"
     )
 
-    render_trade_plan(data)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Decision", data.get("decision", "n/a"))
+    c2.metric("Final Score", data.get("final_score", "n/a"))
+    c3.metric("Expected Return", expected.get("ev_pct", "n/a"))
+    c4.metric("Win Probability", expected.get("probability_win", "n/a"))
 
-    st.divider()
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Entry", trade_plan.get("entry", "n/a"))
+    c2.metric("Stop", trade_plan.get("stop", "n/a"))
+    c3.metric("Target 1", trade_plan.get("target1", "n/a"))
+    c4.metric("Target 2", trade_plan.get("target2", "n/a"))
+    c5.metric("Risk/Reward", trade_plan.get("risk_reward", "n/a"))
 
-    thesis = data.get("final_thesis") or data.get("thesis") or data.get("summary")
-    if isinstance(thesis, dict):
-        thesis = thesis.get("final_thesis") or json.dumps(thesis, indent=2)
-    if thesis:
-        st.subheader("Desk Thesis")
-        st.write(thesis)
+    st.markdown("### Desk Thesis")
+    st.write(data.get("final_thesis", "n/a"))
 
-    why_not = data.get("why_not_long_now") or data.get("why_not_trade_now") or data.get("invalidating_conditions")
-    if why_not:
-        st.subheader("Why not long now / invalidation")
-        if isinstance(why_not, list):
-            for item in why_not:
-                st.warning(str(item))
-        else:
-            st.warning(str(why_not))
+    if data.get("why_not_long_now"):
+        st.markdown("### Why not long now / invalidation")
+        for item in data.get("why_not_long_now", []):
+            st.write(f"- {item}")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Bull Case")
-        bull = data.get("main_bull_case") or data.get("bull_case") or data.get("bull")
-        st.success(bull if bull else "n/a")
-    with c2:
-        st.subheader("Bear Case")
-        bear = data.get("main_bear_case") or data.get("bear_case") or data.get("bear")
-        st.error(bear if bear else "n/a")
+    if data.get("main_bull_case"):
+        st.markdown("### Bull Case")
+        for item in data.get("main_bull_case", []):
+            st.write(f"- {item}")
 
-    st.divider()
-    scores = data.get("scores", {})
-    if isinstance(scores, dict) and scores:
-        st.subheader("Scores")
-        cols = st.columns(3)
+    if data.get("main_bear_case"):
+        st.markdown("### Bear Case")
+        for item in data.get("main_bear_case", []):
+            st.write(f"- {item}")
+
+    scores = data.get("scores") or {}
+    if scores:
+        st.markdown("### Scores")
+        cols = st.columns(4)
         for i, (k, v) in enumerate(scores.items()):
-            with cols[i % 3]:
-                render_score_bar(k.replace("_", " ").title(), v)
-
-    reads = data.get("reads") if isinstance(data.get("reads"), dict) else {}
-    snapshots = {
-        "Technical Read": data.get("technical_read") or reads.get("technical"),
-        "Liquidity Read": data.get("liquidity_read") or reads.get("liquidity"),
-        "Options Read": data.get("options_read") or reads.get("options"),
-        "Game Theory Read": data.get("game_theory_read") or reads.get("game_theory"),
-        "Catalyst Read": data.get("catalyst_read") or reads.get("catalyst"),
-        "Expectation Read": data.get("expectation_read") or reads.get("expectation"),
-        "Merton / Capital Structure": reads.get("merton_credit"),
-        "NeoCloud Valuation": reads.get("neocloud_valuation"),
-    }
-    clean = {k: v for k, v in snapshots.items() if v}
-    if clean:
-        st.subheader("Key Reads")
-        for k, v in clean.items():
-            st.markdown(f"**{k}:** {v}")
-
-    cap = data.get("capital_structure_snapshot") or {}
-    neo = data.get("neocloud_snapshot") or {}
-    if cap or neo:
-        st.subheader("Specialized Engines")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**Merton / Capital Structure**")
-            if cap:
-                st.metric("Credit Score", cap.get("score"))
-                st.write(f"Signal: {cap.get('signal')}")
-                st.write(f"Risk: {cap.get('risk')}")
-                st.write(f"Distance to default: {cap.get('distance_to_default')}")
-                st.write(f"PD proxy: {cap.get('pd_annual_proxy_pct')}%")
-                st.write(f"Net debt / market cap: {cap.get('net_debt_to_market_cap_pct')}%")
-            else:
-                st.info("Not available")
-        with c2:
-            st.markdown("**NeoCloud Valuation**")
-            if neo:
-                st.metric("NeoCloud Score", neo.get("score"))
-                st.write(f"Signal: {neo.get('signal')}")
-                st.write(f"EV/current ARR: {neo.get('ev_current_arr')}")
-                st.write(f"EV/target ARR: {neo.get('ev_target_arr')}")
-                st.write(f"Secured power MW: {neo.get('secured_power_mw')}")
-                st.write(f"GPU count: {neo.get('gpu_count')}")
-                if neo.get("subscores"):
-                    st.json(neo.get("subscores"))
-            else:
-                st.info("Not applicable")
+            cols[i % 4].metric(k.replace("_", " ").title(), f"{v}/100")
 
     with st.expander("Raw response"):
         st.json(data)
-
 
 def to_scanner_df(resp: Any) -> pd.DataFrame:
     data = extract_data(resp)
@@ -436,11 +463,20 @@ with analyze_tab:
                 ok, resp = api_request(
                     "POST",
                     "/api/v1/analyze/compact",
-                    payload={"ticker": ticker, "persist_signal": persist_signal},
+                    payload={
+                        "ticker": ticker,
+                        "persist_signal": persist_signal,
+                    },
                     timeout=120,
                 )
+
             if ok:
                 data = extract_data(resp)
+
+                # Defensive fallback if API returns direct compact object
+                if not data and isinstance(resp, dict):
+                    data = resp
+
                 if raw_mode:
                     st.json(resp)
                 else:
