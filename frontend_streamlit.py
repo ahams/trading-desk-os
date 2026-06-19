@@ -45,7 +45,7 @@ st.set_page_config(
 # Helpers
 # =============================================================================
 
-DEFAULT_API_URL = os.getenv("TDOS_API_URL", "http://127.0.0.1:8080")
+DEFAULT_API_URL = os.getenv("TDOS_API_URL", "http://127.0.0.1:8000")
 DEFAULT_API_KEY = os.getenv("TDOS_API_KEY", "")
 
 
@@ -258,19 +258,52 @@ def render_analysis_card(data: Dict[str, Any]) -> None:
             with cols[i % 3]:
                 render_score_bar(k.replace("_", " ").title(), v)
 
+    reads = data.get("reads") if isinstance(data.get("reads"), dict) else {}
     snapshots = {
-        "Options Read": data.get("options_read"),
-        "Game Theory Read": data.get("game_theory_read"),
-        "Catalyst Read": data.get("catalyst_read"),
-        "Liquidity Read": data.get("liquidity_read"),
-        "Technical Read": data.get("technical_read"),
-        "Expectation Read": data.get("expectation_read"),
+        "Technical Read": data.get("technical_read") or reads.get("technical"),
+        "Liquidity Read": data.get("liquidity_read") or reads.get("liquidity"),
+        "Options Read": data.get("options_read") or reads.get("options"),
+        "Game Theory Read": data.get("game_theory_read") or reads.get("game_theory"),
+        "Catalyst Read": data.get("catalyst_read") or reads.get("catalyst"),
+        "Expectation Read": data.get("expectation_read") or reads.get("expectation"),
+        "Merton / Capital Structure": reads.get("merton_credit"),
+        "NeoCloud Valuation": reads.get("neocloud_valuation"),
     }
     clean = {k: v for k, v in snapshots.items() if v}
     if clean:
         st.subheader("Key Reads")
         for k, v in clean.items():
             st.markdown(f"**{k}:** {v}")
+
+    cap = data.get("capital_structure_snapshot") or {}
+    neo = data.get("neocloud_snapshot") or {}
+    if cap or neo:
+        st.subheader("Specialized Engines")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Merton / Capital Structure**")
+            if cap:
+                st.metric("Credit Score", cap.get("score"))
+                st.write(f"Signal: {cap.get('signal')}")
+                st.write(f"Risk: {cap.get('risk')}")
+                st.write(f"Distance to default: {cap.get('distance_to_default')}")
+                st.write(f"PD proxy: {cap.get('pd_annual_proxy_pct')}%")
+                st.write(f"Net debt / market cap: {cap.get('net_debt_to_market_cap_pct')}%")
+            else:
+                st.info("Not available")
+        with c2:
+            st.markdown("**NeoCloud Valuation**")
+            if neo:
+                st.metric("NeoCloud Score", neo.get("score"))
+                st.write(f"Signal: {neo.get('signal')}")
+                st.write(f"EV/current ARR: {neo.get('ev_current_arr')}")
+                st.write(f"EV/target ARR: {neo.get('ev_target_arr')}")
+                st.write(f"Secured power MW: {neo.get('secured_power_mw')}")
+                st.write(f"GPU count: {neo.get('gpu_count')}")
+                if neo.get("subscores"):
+                    st.json(neo.get("subscores"))
+            else:
+                st.info("Not applicable")
 
     with st.expander("Raw response"):
         st.json(data)

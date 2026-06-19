@@ -82,6 +82,16 @@ def _why_not_long(result: Dict[str, Any]) -> List[str]:
     if theme_score is not None and theme_score < 40:
         reasons.append(f"Theme participation is weak ({theme_score}/100): ticker is lagging its theme or benchmark.")
 
+    merton = metas.get("merton") or {}
+    merton_score = _round(merton.get("score"), 1)
+    if merton_score is not None and merton_score < 50:
+        reasons.append(f"Capital-structure/Merton credit risk is elevated ({merton_score}/100): {merton.get('signal', 'credit risk warning')}.")
+
+    neocloud = metas.get("neocloud") or {}
+    neocloud_score = _round(neocloud.get("score"), 1)
+    if neocloud_score is not None and neocloud_score < 50 and neocloud.get("signal") != "Not a NeoCloud-specific name":
+        reasons.append(f"NeoCloud valuation/funding quality is weak ({neocloud_score}/100): {neocloud.get('signal', 'valuation risk')}.")
+
     if not reasons:
         reasons.append("No major blocker detected; decision is mainly constrained by final score/threshold discipline.")
     return reasons
@@ -109,6 +119,8 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
     liquidity_meta = metas.get("liquidity") or {}
     theme_meta = metas.get("theme") or {}
     expected_meta = metas.get("expectation") or {}
+    merton_meta = metas.get("merton") or {}
+    neocloud_meta = metas.get("neocloud") or {}
 
     decision = result.get("decision")
     final_score = _round(result.get("final_score"), 1)
@@ -125,6 +137,10 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
         bull_points.append(f"Options positioning supportive ({_round(scores.get('options'), 1)}/100).")
     if scores.get("expectation") and float(scores.get("expectation")) >= 65:
         bull_points.append(f"Expectations look beatable ({_round(scores.get('expectation'), 1)}/100).")
+    if scores.get("merton") and float(scores.get("merton")) >= 70:
+        bull_points.append(f"Capital structure supportive / low credit risk ({_round(scores.get('merton'), 1)}/100).")
+    if scores.get("neocloud") and float(scores.get("neocloud")) >= 70:
+        bull_points.append(f"NeoCloud capacity/ARR valuation supportive ({_round(scores.get('neocloud'), 1)}/100).")
     if result.get("regime"):
         bull_points.append(f"Market regime: {result.get('regime')}.")
 
@@ -137,6 +153,10 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
         bear_points.append(f"Negative CMF ({_round(liquidity_meta.get('cmf'), 2)}), suggesting distribution.")
     if theme_meta.get("total") is not None and float(theme_meta.get("total")) < 40:
         bear_points.append("Ticker is lagging its theme/basket.")
+    if scores.get("merton") and float(scores.get("merton")) < 50:
+        bear_points.append(f"Capital-structure risk elevated ({_round(scores.get('merton'), 1)}/100).")
+    if scores.get("neocloud") and float(scores.get("neocloud")) < 50 and neocloud_meta.get("signal") != "Not a NeoCloud-specific name":
+        bear_points.append(f"NeoCloud valuation/funding risk elevated ({_round(scores.get('neocloud'), 1)}/100).")
 
     trade_plan = {
         "entry": _round(result.get("entry"), 2),
@@ -183,6 +203,8 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
             "game_theory": _round(scores.get("game"), 1),
             "catalyst": _round(scores.get("catalyst"), 1),
             "expectation": _round(scores.get("expectation"), 1),
+            "merton_credit": _round(scores.get("merton"), 1),
+            "neocloud_valuation": _round(scores.get("neocloud"), 1),
         },
         "main_bull_case": bull_points[:5] or [summary.get("fundamental") or "No clear bull case detected."],
         "main_bear_case": bear_points[:5] or ["No major bearish factor detected."],
@@ -194,6 +216,8 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
             "game_theory": game_meta.get("participant_read") or summary.get("game_theory"),
             "catalyst": summary.get("catalyst"),
             "expectation": expected_meta.get("expectation_read") or summary.get("expectation"),
+            "merton_credit": merton_meta.get("summary") or summary.get("merton"),
+            "neocloud_valuation": neocloud_meta.get("summary") or summary.get("neocloud"),
             "theme": theme_meta.get("summary"),
         },
         "options_snapshot": {
@@ -211,6 +235,23 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
             "gamma_squeeze_score": _round(game_meta.get("gamma_squeeze_score"), 1),
             "pinning_risk_score": _round(game_meta.get("pinning_risk_score"), 1),
             "dominant_participants": dominant_participants,
+        },
+        "capital_structure_snapshot": {
+            "score": _round(merton_meta.get("score"), 1),
+            "signal": merton_meta.get("signal"),
+            "risk": (merton_meta.get("trade_impact") or {}).get("risk"),
+            "distance_to_default": _round((merton_meta.get("metrics") or {}).get("distance_to_default"), 2),
+            "pd_annual_proxy_pct": _pct((merton_meta.get("metrics") or {}).get("pd_annual_proxy")),
+            "net_debt_to_market_cap_pct": _pct((merton_meta.get("metrics") or {}).get("net_debt_to_market_cap")),
+        },
+        "neocloud_snapshot": {
+            "score": _round(neocloud_meta.get("score"), 1),
+            "signal": neocloud_meta.get("signal"),
+            "subscores": neocloud_meta.get("subscores") or {},
+            "ev_current_arr": _round((neocloud_meta.get("metrics") or {}).get("ev_current_arr"), 2),
+            "ev_target_arr": _round((neocloud_meta.get("metrics") or {}).get("ev_target_arr"), 2),
+            "secured_power_mw": _round((neocloud_meta.get("metrics") or {}).get("secured_power_mw"), 0),
+            "gpu_count": _round((neocloud_meta.get("metrics") or {}).get("gpu_count"), 0),
         },
         "final_thesis": result.get("thesis"),
     }

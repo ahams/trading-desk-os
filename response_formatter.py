@@ -109,7 +109,8 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
     liquidity_meta = metas.get("liquidity") or {}
     theme_meta = metas.get("theme") or {}
     expected_meta = metas.get("expectation") or {}
-
+    merton_meta =metas.get("merton") or {}
+    neocloud_meta = metas.get("neocloud") or {}
     decision = result.get("decision")
     final_score = _round(result.get("final_score"), 1)
     setup_type = result.get("setup_type")
@@ -183,6 +184,8 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
             "game_theory": _round(scores.get("game"), 1),
             "catalyst": _round(scores.get("catalyst"), 1),
             "expectation": _round(scores.get("expectation"), 1),
+            "merton_credit": _round(scores.get("merton"), 1),
+            "neocloud_valuation": _round(scores.get("neocloud"), 1),
         },
         "main_bull_case": bull_points[:5] or [summary.get("fundamental") or "No clear bull case detected."],
         "main_bear_case": bear_points[:5] or ["No major bearish factor detected."],
@@ -195,6 +198,8 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
             "catalyst": summary.get("catalyst"),
             "expectation": expected_meta.get("expectation_read") or summary.get("expectation"),
             "theme": theme_meta.get("summary"),
+            "merton_credit": merton_meta.get("summary") or summary.get("merton"),
+            "neocloud_valuation": neocloud_meta.get("summary") or summary.get("neocloud"),
         },
         "options_snapshot": {
             "expiry": options_meta.get("expiry"),
@@ -211,6 +216,23 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
             "gamma_squeeze_score": _round(game_meta.get("gamma_squeeze_score"), 1),
             "pinning_risk_score": _round(game_meta.get("pinning_risk_score"), 1),
             "dominant_participants": dominant_participants,
+        },
+        "capital_structure_snapshot": {
+            "score": _round(merton_meta.get("score"), 1),
+            "signal": merton_meta.get("signal"),
+            "risk": (merton_meta.get("trade_impact") or {}).get("risk"),
+            "distance_to_default": _round((merton_meta.get("metrics") or {}).get("distance_to_default"), 2),
+            "pd_annual_proxy_pct": _pct((merton_meta.get("metrics") or {}).get("pd_annual_proxy")),
+            "net_debt_to_market_cap_pct": _pct((merton_meta.get("metrics") or {}).get("net_debt_to_market_cap")),
+        },
+        "neocloud_snapshot": {
+            "score": _round(neocloud_meta.get("score"), 1),
+            "signal": neocloud_meta.get("signal"),
+            "subscores": neocloud_meta.get("subscores") or {},
+            "ev_current_arr": _round((neocloud_meta.get("metrics") or {}).get("ev_current_arr"), 2),
+            "ev_target_arr": _round((neocloud_meta.get("metrics") or {}).get("ev_target_arr"), 2),
+            "secured_power_mw": _round((neocloud_meta.get("metrics") or {}).get("secured_power_mw"), 0),
+            "gpu_count": _round((neocloud_meta.get("metrics") or {}).get("gpu_count"), 0),
         },
         "final_thesis": result.get("thesis"),
     }

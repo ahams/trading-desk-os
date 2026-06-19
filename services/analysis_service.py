@@ -17,6 +17,9 @@ from fundamentals import fundamental_score
 from game_theory import game_theory_score
 from liquidity import analyze_liquidity
 from market_regime import analyze_market_regime
+from merton_credit_engine import analyze_merton_credit
+from neocloud_profile_loader import is_neocloud_ticker, load_neocloud_profile
+from neocloud_valuation import analyze_neocloud
 from options_engine import options_score
 from scoring import build_thesis, classify, combine_scores, result_row
 from technicals import technical_score, trade_levels
@@ -28,13 +31,15 @@ from database.store import connect, init_db, utc_now
 logger = logging.getLogger("trading_desk.api.analysis")
 
 DEFAULT_WEIGHTS = {
-    "fundamental": 0.16,
-    "technical": 0.22,
-    "liquidity": 0.14,
-    "options": 0.14,
-    "game": 0.15,
-    "catalyst": 0.08,
-    "expectation": 0.11,
+    "fundamental": 0.14,
+    "technical": 0.20,
+    "liquidity": 0.12,
+    "options": 0.12,
+    "game": 0.13,
+    "catalyst": 0.07,
+    "expectation": 0.10,
+    "merton": 0.07,
+    "neocloud": 0.05,
 }
 
 MARKET_SYMBOLS = ["SPY", "QQQ", "IWM", "DIA", "TLT", "HYG", "LQD", "UUP", "^VIX", "^TNX"]
@@ -136,6 +141,34 @@ def analyze_stock(
         g_score, g_meta = 50.0, {"participant_read": "Game theory model unavailable", "flags": [str(exc)]}
 
     try:
+        merton_meta = analyze_merton_credit(ticker, {"ohlcv": df, "fundamentals": info, "risk_free_rate": 0.045})
+        merton_score = float(merton_meta.get("score", 50))
+    except Exception as exc:
+        logger.warning("merton credit score failed %s: %s", ticker, exc)
+        merton_score, merton_meta = 50.0, {"summary": "Merton credit model unavailable", "flags": [str(exc)], "metrics": {}}
+
+    try:
+        if is_neocloud_ticker(ticker, info):
+            neocloud_profile = load_neocloud_profile(ticker)
+            neocloud_meta = analyze_neocloud(ticker, {"fundamentals": info, "neocloud": neocloud_profile})
+            neocloud_score = float(neocloud_meta.get("score", 50))
+        else:
+            neocloud_score = 50.0
+            neocloud_meta = {
+                "engine": "neocloud_valuation",
+                "ticker": ticker,
+                "score": 50.0,
+                "signal": "Not a NeoCloud-specific name",
+                "summary": "NeoCloud valuation not applicable to this ticker.",
+                "flags": [],
+                "metrics": {},
+                "subscores": {},
+            }
+    except Exception as exc:
+        logger.warning("neocloud score failed %s: %s", ticker, exc)
+        neocloud_score, neocloud_meta = 50.0, {"summary": "NeoCloud valuation model unavailable", "flags": [str(exc)], "metrics": {}}
+
+    try:
         theme_meta = analyze_theme(
             ticker=ticker,
             stock_df=df,
@@ -156,6 +189,8 @@ def analyze_stock(
         "game": float(g_score),
         "catalyst": float(c_score),
         "expectation": float(e_score),
+        "merton": float(merton_score),
+        "neocloud": float(neocloud_score),
     }
     final_score = combine_scores(scores, DEFAULT_WEIGHTS)
     decision = classify(final_score, t_meta.get("setup_type", ""))
@@ -173,8 +208,10 @@ def analyze_stock(
             "catalyst": c_score,
             "theme": float(theme_meta.get("total", 50)),
             "expectation": e_score,
+            "merton": merton_score,
+            "neocloud": neocloud_score,
         },
-        metas={"technical": t_meta, "liquidity": l_meta, "options": o_meta, "game": g_meta, "theme": theme_meta, "expectation": e_meta},
+        metas={"technical": t_meta, "liquidity": l_meta, "options": o_meta, "game": g_meta, "theme": theme_meta, "expectation": e_meta, "merton": merton_meta, "neocloud": neocloud_meta},
         regime_result=regime_result,
         account_size=account_size,
         risk_per_trade=risk_pct,
@@ -189,6 +226,9 @@ def analyze_stock(
         levels["rr"] = er_levels["risk_reward"]
 
     thesis = build_thesis(ticker, decision, t_meta.get("setup_type", ""), f_meta, t_meta, l_meta, o_meta, g_meta, c_meta, e_meta)
+    thesis += f" Merton credit: {merton_meta.get('signal', 'n/a')} — {merton_meta.get('summary', 'n/a')}"
+    if is_neocloud_ticker(ticker, info):
+        thesis += f" NeoCloud valuation: {neocloud_meta.get('signal', 'n/a')} — {neocloud_meta.get('summary', 'n/a')}"
     row = result_row(ticker, final_score, decision, t_meta.get("setup_type", ""), levels, thesis)
 
     result = {
@@ -209,6 +249,8 @@ def analyze_stock(
             "game_theory": g_meta.get("summary") or g_meta.get("participant_read"),
             "catalyst": c_meta.get("catalyst_read"),
             "expectation": e_meta.get("expectation_read"),
+            "merton": merton_meta.get("summary"),
+            "neocloud": neocloud_meta.get("summary"),
             "expected_return": er.get("summary"),
         },
         "metas": {
@@ -219,6 +261,8 @@ def analyze_stock(
             "game": g_meta,
             "catalyst": c_meta,
             "expectation": e_meta,
+            "merton": merton_meta,
+            "neocloud": neocloud_meta,
             "theme": theme_meta,
         },
     }
