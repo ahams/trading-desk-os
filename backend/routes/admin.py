@@ -40,3 +40,15 @@ def billing_event(req: BillingEventRequest, x_admin_key: Optional[str] = Header(
             (user["id"] if user else None, req.event_type, json.dumps(req.payload), utc_now()),
         )
     return {"ok": True, "user_id": user["id"] if user else None}
+
+@router.get("/debug-admin")
+def debug_admin():
+    return {
+        "admin_key_loaded": bool(settings.admin_bootstrap_key),
+        "admin_key_length": len(settings.admin_bootstrap_key or ""),
+        "admin_key_preview": (
+            settings.admin_bootstrap_key[:3] + "***" + settings.admin_bootstrap_key[-3:]
+            if settings.admin_bootstrap_key
+            else None
+        ),
+    }
