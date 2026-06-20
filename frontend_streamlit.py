@@ -6,11 +6,11 @@ Streamlit UI that connects to the FastAPI monetized backend.
 Run:
     streamlit run frontend_streamlit.py
 
-Expected backend endpoints:
+Backend endpoints used:
     GET  /api/v1/account
     POST /api/v1/analyze/compact
-    GET  /api/v1/scanner/compact?tickers=AAPL,NVDA
-    GET  /api/v1/report/daily?tickers=AAPL,NVDA
+    POST /api/v1/scanner/compact
+    POST /api/v1/report/daily
 
 Environment variables supported:
     TDOS_API_URL
@@ -45,13 +45,12 @@ st.set_page_config(
 # Helpers
 # =============================================================================
 
-DEFAULT_API_URL = os.getenv("TDOS_API_URL", "http://127.0.0.1:8080")
+DEFAULT_API_URL = os.getenv("TDOS_API_URL", "http://127.0.0.1:8000")
 DEFAULT_API_KEY = os.getenv("TDOS_API_KEY", "")
 
 
 def normalize_base_url(url: str) -> str:
-    url = (url or "").strip()
-    return url.rstrip("/")
+    return (url or "").strip().rstrip("/")
 
 
 def get_auth_headers() -> Dict[str, str]:
@@ -87,33 +86,30 @@ def api_request(
         )
 
         content_type = resp.headers.get("content-type", "")
-        if "application/json" in content_type:
-            body = resp.json()
-        else:
-            body = resp.text
+        body = resp.json() if "application/json" in content_type else resp.text
 
         if resp.status_code >= 400:
-            return False, {
-                "status_code": resp.status_code,
-                "error": body,
-                "url": url,
-            }
+            return False, {"status_code": resp.status_code, "error": body, "url": url}
 
         return True, body
 
     except requests.exceptions.ConnectionError:
-        return False, f"Could not connect to API at {url}. Is uvicorn running?"
+        return False, f"Could not connect to API at {url}. Is backend running?"
     except requests.exceptions.Timeout:
         return False, f"Request timed out after {timeout}s: {url}"
     except Exception as exc:
         return False, f"Unexpected API error: {exc}"
 
 
-def extract_data(resp: Any) -> Dict[str, Any]:
+def extract_data(resp: Any) -> Any:
     """API may return {user, credits_used, data}; compact endpoints may return direct data."""
-    if isinstance(resp, dict) and "data" in resp and isinstance(resp["data"], dict):
+    if isinstance(resp, dict) and isinstance(resp.get("data"), (dict, list)):
         return resp["data"]
-    return resp if isinstance(resp, dict) else {"raw": resp}
+    return resp
+
+
+def parse_tickers(text: str) -> List[str]:
+    return [x.strip().upper() for x in (text or "").replace("\n", ",").split(",") if x.strip()]
 
 
 def as_float(x: Any, default: float = 0.0) -> float:
@@ -130,6 +126,8 @@ def fmt_pct(x: Any, decimals: int = 1) -> str:
         return "n/a"
     try:
         val = float(x)
+        # Backend compact expected_return.ev_pct is already a percent such as -1.1.
+        # Raw expected_return may be decimal such as -0.011.
         if abs(val) <= 1.5:
             val *= 100
         return f"{val:.{decimals}f}%"
@@ -173,210 +171,196 @@ def render_score_bar(label: str, score: Any) -> None:
     st.progress(score_f / 100.0, text=f"{score_f:.1f}/100")
 
 
-def render_metric_card(title: str, value: str, help_text: Optional[str] = None) -> None:
-    st.metric(title, value, help=help_text)
+def safe_metric_value(x: Any, decimals: int = 1) -> str:
+    if x is None:
+        return "n/a"
+    try:
+        return f"{float(x):,.{decimals}f}"
+    except Exception:
+        return str(x)
 
 
-def render_trade_plan(data: Dict[str, Any]) -> None:
-    decision = data.get("decision") or data.get("final_decision") or "n/a"
-    score = data.get("final_score") or data.get("score") or data.get("confidence")
+# =============================================================================
+# Renderers
+# =============================================================================
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Decision", decision)
-    c2.metric("Final Score", fmt_num(score, 1))
-    c3.metric("Expected Return", fmt_pct(data.get("expected_return") or data.get("expected_return_pct")))
-    c4.metric("Win Probability", fmt_pct(data.get("probability_win")))
-
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Entry", fmt_num(data.get("entry") or data.get("best_entry")))
-    c2.metric("Stop", fmt_num(data.get("stop") or data.get("stop_loss")))
-    c3.metric("Target 1", fmt_num(data.get("target1") or data.get("target_1")))
-    c4.metric("Target 2", fmt_num(data.get("target2") or data.get("target_2")))
-    c5.metric("Risk/Reward", fmt_num(data.get("rr") or data.get("risk_reward")))
-
-
-# def render_analysis_card(data: Dict[str, Any]) -> None:
-#     ticker = data.get("ticker", "Ticker")
-#     decision = data.get("decision", "n/a")
-#     setup = data.get("setup_type") or data.get("setup") or "n/a"
-#     regime = data.get("regime", "n/a")
-#     theme = data.get("theme", "n/a")
-
-#     st.markdown(
-#         f"""
-#         <div style="border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-bottom:14px;">
-#           <div style="display:flex;justify-content:space-between;align-items:center;">
-#             <div>
-#               <h2 style="margin:0;">{ticker}</h2>
-#               <div style="color:#6b7280;">{setup} · Regime: {regime} · Theme: {theme}</div>
-#             </div>
-#             <div style="background:{decision_color(decision)};color:white;padding:8px 14px;border-radius:999px;font-weight:700;">
-#               {decision}
-#             </div>
-#           </div>
-#         </div>
-#         """,
-#         unsafe_allow_html=True,
-#     )
-
-#     render_trade_plan(data)
-
-#     st.divider()
-
-#     thesis = data.get("final_thesis") or data.get("thesis") or data.get("summary")
-#     if isinstance(thesis, dict):
-#         thesis = thesis.get("final_thesis") or json.dumps(thesis, indent=2)
-#     if thesis:
-#         st.subheader("Desk Thesis")
-#         st.write(thesis)
-
-#     why_not = data.get("why_not_long_now") or data.get("why_not_trade_now") or data.get("invalidating_conditions")
-#     if why_not:
-#         st.subheader("Why not long now / invalidation")
-#         if isinstance(why_not, list):
-#             for item in why_not:
-#                 st.warning(str(item))
-#         else:
-#             st.warning(str(why_not))
-
-#     c1, c2 = st.columns(2)
-#     with c1:
-#         st.subheader("Bull Case")
-#         bull = data.get("main_bull_case") or data.get("bull_case") or data.get("bull")
-#         st.success(bull if bull else "n/a")
-#     with c2:
-#         st.subheader("Bear Case")
-#         bear = data.get("main_bear_case") or data.get("bear_case") or data.get("bear")
-#         st.error(bear if bear else "n/a")
-
-#     st.divider()
-#     scores = data.get("scores", {})
-#     if isinstance(scores, dict) and scores:
-#         st.subheader("Scores")
-#         cols = st.columns(3)
-#         for i, (k, v) in enumerate(scores.items()):
-#             with cols[i % 3]:
-#                 render_score_bar(k.replace("_", " ").title(), v)
-
-#     snapshots = {
-#         "Options Read": data.get("options_read"),
-#         "Game Theory Read": data.get("game_theory_read"),
-#         "Catalyst Read": data.get("catalyst_read"),
-#         "Liquidity Read": data.get("liquidity_read"),
-#         "Technical Read": data.get("technical_read"),
-#         "Expectation Read": data.get("expectation_read"),
-#         "Merton / Capital Structure": data.get("merton_credit"),
-#         "NeoCloud Valuation": data.get("neocloud_valuation"),
-        
-        
-#     }
-#     clean = {k: v for k, v in snapshots.items() if v}
-#     if clean:
-#         st.subheader("Key Reads")
-#         for k, v in clean.items():
-#             st.markdown(f"**{k}:** {v}")
-
-#     with st.expander("Raw response"):
-#         st.json(data)
-
-def render_analysis_card(data: dict):
+def render_analysis_card(data: Dict[str, Any]) -> None:
     if not isinstance(data, dict):
         st.warning("No analysis data returned")
         return
 
+    ticker = data.get("ticker", "N/A")
+    decision = data.get("decision", "n/a")
+    setup = data.get("setup_type", "n/a")
+    regime = data.get("regime", "n/a")
+    theme = data.get("theme", "n/a")
+
     trade_plan = data.get("trade_plan") or {}
     expected = data.get("expected_return") or {}
+    scores = data.get("scores") or {}
+    reads = data.get("reads") or {}
 
-    st.subheader(f"{data.get('ticker', 'N/A')}")
-
-    st.caption(
-        f"{data.get('setup_type', 'n/a')} · "
-        f"Regime: {data.get('regime', 'n/a')} · "
-        f"Theme: {data.get('theme', 'n/a')}"
+    st.markdown(
+        f"""
+        <div style="border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-bottom:14px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <h2 style="margin:0;">{ticker}</h2>
+              <div style="color:#6b7280;">{setup} · Regime: {regime} · Theme: {theme}</div>
+            </div>
+            <div style="background:{decision_color(decision)};color:white;padding:8px 14px;border-radius:999px;font-weight:700;">
+              {decision}
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Decision", data.get("decision", "n/a"))
-    c2.metric("Final Score", data.get("final_score", "n/a"))
-    c3.metric("Expected Return", expected.get("ev_pct", "n/a"))
-    c4.metric("Win Probability", expected.get("probability_win", "n/a"))
+    c1.metric("Decision", decision)
+    c2.metric("Final Score", safe_metric_value(data.get("final_score"), 1))
+    c3.metric("Expected Return", fmt_pct(expected.get("ev_pct")))
+    c4.metric("Win Probability", fmt_pct(expected.get("probability_win")))
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Entry", trade_plan.get("entry", "n/a"))
-    c2.metric("Stop", trade_plan.get("stop", "n/a"))
-    c3.metric("Target 1", trade_plan.get("target1", "n/a"))
-    c4.metric("Target 2", trade_plan.get("target2", "n/a"))
-    c5.metric("Risk/Reward", trade_plan.get("risk_reward", "n/a"))
+    c1.metric("Entry", fmt_num(trade_plan.get("entry")))
+    c2.metric("Stop", fmt_num(trade_plan.get("stop")))
+    c3.metric("Target 1", fmt_num(trade_plan.get("target1")))
+    c4.metric("Target 2", fmt_num(trade_plan.get("target2")))
+    c5.metric("Risk/Reward", fmt_num(trade_plan.get("risk_reward")))
+
+    tech_snap = data.get("technical_snapshot") or {}
+    if tech_snap:
+        st.markdown("### Technical Decomposition")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Trend Quality", safe_metric_value(tech_snap.get("trend_quality_score"), 1))
+        c1.caption(tech_snap.get("trend_signal", ""))
+        c2.metric("Entry Quality", safe_metric_value(tech_snap.get("entry_quality_score"), 1))
+        c2.caption(tech_snap.get("entry_signal", ""))
+        c3.metric("Leadership", safe_metric_value(tech_snap.get("leadership_score"), 1))
+        c3.caption(tech_snap.get("leadership_signal", ""))
+
+    cap = data.get("capital_structure_snapshot") or {}
+    neo = data.get("neocloud_snapshot") or {}
+    if cap or neo:
+        st.markdown("### Specialized Engines")
+        cols = st.columns(2)
+        with cols[0]:
+            if cap:
+                st.markdown("**Merton / Capital Structure**")
+                st.metric("Credit Score", safe_metric_value(cap.get("score"), 1))
+                st.caption(f"{cap.get('signal', 'n/a')} · Risk: {cap.get('risk', 'n/a')}")
+                st.write("Distance to Default:", cap.get("distance_to_default", "n/a"))
+                st.write("Annual PD Proxy:", cap.get("pd_annual_proxy_pct", "n/a"))
+        with cols[1]:
+            if neo and neo.get("signal") != "Not a NeoCloud-specific name":
+                st.markdown("**NeoCloud Valuation**")
+                st.metric("NeoCloud Score", safe_metric_value(neo.get("score"), 1))
+                st.caption(neo.get("signal", "n/a"))
+                st.write("EV / Current ARR:", neo.get("ev_current_arr", "n/a"))
+                st.write("EV / Target ARR:", neo.get("ev_target_arr", "n/a"))
 
     st.markdown("### Desk Thesis")
     st.write(data.get("final_thesis", "n/a"))
 
-    if data.get("why_not_long_now"):
+    why_not = data.get("why_not_long_now") or []
+    if why_not:
         st.markdown("### Why not long now / invalidation")
-        for item in data.get("why_not_long_now", []):
+        for item in why_not:
             st.write(f"- {item}")
 
-    if data.get("main_bull_case"):
+    c1, c2 = st.columns(2)
+    with c1:
         st.markdown("### Bull Case")
-        for item in data.get("main_bull_case", []):
-            st.write(f"- {item}")
-
-    if data.get("main_bear_case"):
+        bull = data.get("main_bull_case") or []
+        if isinstance(bull, list):
+            for item in bull:
+                st.success(str(item))
+        else:
+            st.success(str(bull))
+    with c2:
         st.markdown("### Bear Case")
-        for item in data.get("main_bear_case", []):
-            st.write(f"- {item}")
+        bear = data.get("main_bear_case") or []
+        if isinstance(bear, list):
+            for item in bear:
+                st.error(str(item))
+        else:
+            st.error(str(bear))
 
-    scores = data.get("scores") or {}
+    if reads:
+        with st.expander("Key Reads", expanded=False):
+            for k, v in reads.items():
+                if v:
+                    st.markdown(f"**{k.replace('_', ' ').title()}:** {v}")
+
     if scores:
         st.markdown("### Scores")
         cols = st.columns(4)
         for i, (k, v) in enumerate(scores.items()):
-            cols[i % 4].metric(k.replace("_", " ").title(), f"{v}/100")
+            with cols[i % 4]:
+                render_score_bar(k.replace("_", " ").title(), v)
 
     with st.expander("Raw response"):
         st.json(data)
 
+
 def to_scanner_df(resp: Any) -> pd.DataFrame:
     data = extract_data(resp)
-    rows = []
+    rows: List[Dict[str, Any]] = []
 
     if isinstance(data, dict):
         if isinstance(data.get("results"), list):
             rows = data["results"]
+        elif isinstance(data.get("data"), list):
+            rows = data["data"]
         elif isinstance(data.get("longs"), list) or isinstance(data.get("shorts"), list):
             rows = (data.get("longs") or []) + (data.get("shorts") or [])
         elif isinstance(data.get("items"), list):
             rows = data["items"]
         elif isinstance(data.get("scanner"), list):
             rows = data["scanner"]
-        else:
-            # If dict of ticker -> analysis
-            if all(isinstance(v, dict) for v in data.values()):
-                rows = list(data.values())
+        elif all(isinstance(v, dict) for v in data.values()):
+            rows = list(data.values())
     elif isinstance(data, list):
         rows = data
-
-    if not rows:
-        return pd.DataFrame()
 
     flat_rows = []
     for row in rows:
         if not isinstance(row, dict):
             continue
         r = dict(row)
-        if "data" in r and isinstance(r["data"], dict):
+        if isinstance(r.get("data"), dict):
             r = r["data"]
+
+        trade_plan = r.pop("trade_plan", {}) if isinstance(r.get("trade_plan"), dict) else {}
+        expected = r.pop("expected_return", {}) if isinstance(r.get("expected_return"), dict) else r.get("expected_return")
         scores = r.pop("scores", {}) if isinstance(r.get("scores"), dict) else {}
+
+        for k in ["entry", "stop", "target1", "target2", "risk_reward", "position_size"]:
+            if k in trade_plan:
+                r[k] = trade_plan[k]
+        if isinstance(expected, dict):
+            r["ev_pct"] = expected.get("ev_pct")
+            r["expected_r"] = expected.get("expected_r")
+            r["probability_win"] = expected.get("probability_win")
+        elif expected is not None:
+            r["expected_return"] = expected
+
         for k, v in scores.items():
             r[f"score_{k}"] = v
         flat_rows.append(r)
 
+    if not flat_rows:
+        return pd.DataFrame()
+
     df = pd.DataFrame(flat_rows)
     preferred = [
-        "ticker", "decision", "final_score", "score", "setup_type", "expected_return",
-        "entry", "stop", "target1", "target2", "rr", "regime", "theme",
-        "score_fundamental", "score_technical", "score_liquidity", "score_options",
-        "score_game", "score_catalyst", "score_expectation",
+        "ticker", "decision", "final_score", "setup_type", "ev_pct", "expected_r", "probability_win",
+        "entry", "stop", "target1", "target2", "risk_reward", "position_size", "regime", "theme",
+        "score_fundamental", "score_technical", "score_trend_quality", "score_entry_quality", "score_leadership",
+        "score_liquidity", "score_options", "score_game_theory", "score_game", "score_catalyst",
+        "score_expectation", "score_merton", "score_neocloud",
     ]
     cols = [c for c in preferred if c in df.columns] + [c for c in df.columns if c not in preferred]
     return df[cols]
@@ -393,8 +377,7 @@ if "api_key" not in st.session_state:
 
 st.sidebar.title("Trading Desk OS")
 st.sidebar.caption("Beta frontend")
-
-st.sidebar.text_input("API URL", key="api_url", placeholder="http://127.0.0.1:8000")
+st.sidebar.text_input("API URL", key="api_url", placeholder="https://your-backend.up.railway.app")
 st.sidebar.text_input("API Key", key="api_key", type="password", placeholder="tdos_xxxxx")
 
 if st.sidebar.button("Test Connection", use_container_width=True):
@@ -407,7 +390,7 @@ if st.sidebar.button("Test Connection", use_container_width=True):
         st.sidebar.write(resp)
 
 st.sidebar.divider()
-st.sidebar.caption("Tip: set TDOS_API_URL and TDOS_API_KEY in .env or shell env for defaults.")
+st.sidebar.caption("Tip: set TDOS_API_URL and TDOS_API_KEY in Railway variables or local environment.")
 
 
 # =============================================================================
@@ -415,7 +398,7 @@ st.sidebar.caption("Tip: set TDOS_API_URL and TDOS_API_KEY in .env or shell env 
 # =============================================================================
 
 st.title("📈 Trading Desk OS Beta")
-st.caption("Multi-factor trade decision engine: regime, theme, fundamentals, technicals, liquidity, options, game theory, and expected return.")
+st.caption("Multi-factor trade decision engine: regime, theme, fundamentals, technicals, liquidity, options, game theory, Merton credit, NeoCloud valuation, and expected return.")
 
 account_tab, analyze_tab, scanner_tab, report_tab, history_tab = st.tabs(
     ["Account", "Analyze Stock", "Scanner", "Daily Report", "Signal History"]
@@ -432,13 +415,15 @@ with account_tab:
         ok, resp = api_request("GET", "/api/v1/account")
         if ok:
             st.success("Account loaded")
-            data = extract_data(resp)
-            if isinstance(resp, dict):
-                user = resp.get("user", {})
-                c1, c2, c3 = st.columns(3)
+            account = extract_data(resp)
+            if isinstance(account, dict):
+                # API may return direct account object or wrapper with user object.
+                user = account.get("user") if isinstance(account.get("user"), dict) else account
+                c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Email", user.get("email", "n/a"))
                 c2.metric("Plan", user.get("plan", "n/a"))
-                c3.metric("Credits Used", resp.get("credits_used", "n/a"))
+                c3.metric("Credits Used", user.get("monthly_credits_used", account.get("monthly_credits_used", "n/a")))
+                c4.metric("Remaining", user.get("monthly_credits_remaining", account.get("monthly_credits_remaining", "n/a")))
             st.json(resp)
         else:
             show_error(resp)
@@ -463,20 +448,11 @@ with analyze_tab:
                 ok, resp = api_request(
                     "POST",
                     "/api/v1/analyze/compact",
-                    payload={
-                        "ticker": ticker,
-                        "persist_signal": persist_signal,
-                    },
-                    timeout=120,
+                    payload={"ticker": ticker, "persist_signal": persist_signal},
+                    timeout=180,
                 )
-
             if ok:
                 data = extract_data(resp)
-
-                # Defensive fallback if API returns direct compact object
-                if not data and isinstance(resp, dict):
-                    data = resp
-
                 if raw_mode:
                     st.json(resp)
                 else:
@@ -491,9 +467,10 @@ with analyze_tab:
 
 with scanner_tab:
     st.header("Scanner")
-    default_watchlist = "NVDA,AAPL,MSFT,AMZN,META,GOOGL,TSLA,AMD,AVGO,PLTR"
+    default_watchlist = "NVDA,AAPL,MSFT,AMZN,META,GOOGL,TSLA,AMD,AVGO,PLTR,MRVL,ANET,CRWV,NBIS,IREN"
     watchlist_text = st.text_area("Tickers", value=default_watchlist, height=90)
     uploaded = st.file_uploader("Optional CSV watchlist", type=["csv"])
+    include_options = st.checkbox("Include options", value=True, key="scanner_include_options")
 
     tickers: List[str] = []
     if uploaded is not None:
@@ -504,7 +481,7 @@ with scanner_tab:
         except Exception as exc:
             st.error(f"Could not read CSV: {exc}")
     else:
-        tickers = [x.strip().upper() for x in watchlist_text.replace("\n", ",").split(",") if x.strip()]
+        tickers = parse_tickers(watchlist_text)
 
     max_tickers = st.slider("Max tickers this run", 1, 100, min(20, max(1, len(tickers))))
     tickers = tickers[:max_tickers]
@@ -513,13 +490,23 @@ with scanner_tab:
         if not tickers:
             st.warning("Add at least one ticker")
         else:
+            payload = {
+                "tickers": tickers,
+                "max_names": len(tickers),
+                "include_options": include_options,
+            }
             with st.spinner(f"Scanning {len(tickers)} tickers..."):
-                ok, resp = api_request(
-                    "GET",
-                    "/api/v1/scanner/compact",
-                    params={"tickers": ",".join(tickers)},
-                    timeout=300,
-                )
+                ok, resp = api_request("POST", "/api/v1/scanner/compact", payload=payload, timeout=600)
+
+                # Backward-compatible fallback for older backend builds.
+                if not ok and isinstance(resp, dict) and resp.get("status_code") == 405:
+                    ok, resp = api_request(
+                        "GET",
+                        "/api/v1/scanner/compact",
+                        params={"tickers": ",".join(tickers)},
+                        timeout=600,
+                    )
+
             if ok:
                 df = to_scanner_df(resp)
                 if df.empty:
@@ -547,56 +534,81 @@ with scanner_tab:
 
 with report_tab:
     st.header("Daily Report")
-    report_tickers = st.text_input(
+    report_tickers_text = st.text_area(
         "Report tickers",
-        value="NVDA,AAPL,MSFT,AMZN,META,GOOGL,TSLA,AMD,AVGO,PLTR",
+        value="NVDA,AAPL,MSFT,AMZN,META,GOOGL,TSLA,AMD,AVGO,PLTR,MRVL,ANET",
+        height=90,
     )
+    report_title = st.text_input("Report title", value="Trading Desk OS Daily Report")
+    report_max_names = st.slider("Max report names", 1, 100, 20)
+    include_signal_records = st.checkbox("Record report signals", value=True)
+
     if st.button("Generate Daily Report", type="primary", use_container_width=True):
-        with st.spinner("Generating report..."):
-            ok, resp = api_request(
-                "GET",
-                "/api/v1/report/daily",
-                params={"tickers": report_tickers},
-                timeout=300,
-            )
-        if ok:
-            data = extract_data(resp)
-            st.success("Report generated")
-            if isinstance(data, dict):
-                html = data.get("html") or data.get("html_report")
-                markdown = data.get("markdown") or data.get("email") or data.get("text")
-                telegram = data.get("telegram") or data.get("telegram_text")
-
-                if markdown:
-                    st.subheader("Markdown / Email")
-                    st.markdown(markdown)
-                    st.download_button(
-                        "Download Markdown",
-                        markdown,
-                        file_name="tdos_daily_report.md",
-                        mime="text/markdown",
-                    )
-
-                if html:
-                    st.subheader("HTML Preview")
-                    st.components.v1.html(html, height=700, scrolling=True)
-                    st.download_button(
-                        "Download HTML",
-                        html,
-                        file_name="tdos_daily_report.html",
-                        mime="text/html",
-                    )
-
-                if telegram:
-                    st.subheader("Telegram Text")
-                    st.code(telegram, language="text")
-            else:
-                st.write(data)
-
-            with st.expander("Raw response"):
-                st.json(resp)
+        report_tickers = parse_tickers(report_tickers_text)[:report_max_names]
+        if not report_tickers:
+            st.warning("Add at least one report ticker")
         else:
-            show_error(resp)
+            payload = {
+                "tickers": report_tickers,
+                "title": report_title,
+                "max_names": report_max_names,
+                "include_signal_records": include_signal_records,
+            }
+            with st.spinner("Generating report..."):
+                ok, resp = api_request("POST", "/api/v1/report/daily", payload=payload, timeout=900)
+
+                # Backward-compatible fallback for older backend builds.
+                if not ok and isinstance(resp, dict) and resp.get("status_code") == 405:
+                    ok, resp = api_request(
+                        "GET",
+                        "/api/v1/report/daily",
+                        params={"tickers": ",".join(report_tickers)},
+                        timeout=900,
+                    )
+
+            if ok:
+                data = extract_data(resp)
+                st.success("Report generated")
+                if isinstance(data, dict):
+                    html = data.get("html_text") or data.get("html") or data.get("html_report")
+                    markdown = data.get("markdown_text") or data.get("markdown") or data.get("email") or data.get("text")
+                    telegram = data.get("telegram_text") or data.get("telegram")
+                    executive_summary = data.get("executive_summary")
+
+                    if executive_summary:
+                        st.subheader("Executive Summary")
+                        st.write(executive_summary)
+
+                    if markdown:
+                        st.subheader("Markdown / Email")
+                        st.markdown(markdown)
+                        st.download_button(
+                            "Download Markdown",
+                            markdown,
+                            file_name="tdos_daily_report.md",
+                            mime="text/markdown",
+                        )
+
+                    if html:
+                        st.subheader("HTML Preview")
+                        st.components.v1.html(html, height=700, scrolling=True)
+                        st.download_button(
+                            "Download HTML",
+                            html,
+                            file_name="tdos_daily_report.html",
+                            mime="text/html",
+                        )
+
+                    if telegram:
+                        st.subheader("Telegram Text")
+                        st.code(telegram, language="text")
+                else:
+                    st.write(data)
+
+                with st.expander("Raw response"):
+                    st.json(resp)
+            else:
+                show_error(resp)
 
 
 # =============================================================================
