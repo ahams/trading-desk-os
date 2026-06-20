@@ -35,21 +35,121 @@ def infer_setup(x):
     return 'Watchlist / no clean pattern'
 
 def technical_score(df, spy_df=None):
-    x=add_indicators(df)
-    if x.empty or len(x)<60: return 50, {}, x
-    r=x.iloc[-1]; score=0; reasons=[]
-    trend = (r.Close>r.EMA21) + (r.EMA21>r.EMA50) + (r.EMA50>r.EMA200 if not pd.isna(r.EMA200) else 0)
-    score += trend/3*35; reasons.append(f'trend {trend}/3')
-    mom = int(r.MACD>r.MACDsig)+int(r.RSI>50)+int(r.StochK>r.StochD)
-    score += mom/3*25; reasons.append(f'momentum {mom}/3')
-    if r.Close>r.DonchianHigh: score+=15; reasons.append('20d breakout')
-    elif abs(r.Close-r.EMA21)/r.Close<0.03 and r.Close>r.EMA50: score+=10; reasons.append('constructive pullback')
-    if bool(r.Squeeze): score+=8; reasons.append('squeeze')
-    if spy_df is not None and not spy_df.empty and len(spy_df)>30:
-        rs=(df.Close.iloc[-1]/df.Close.iloc[-21]-1) - (spy_df.Close.iloc[-1]/spy_df.Close.iloc[-21]-1)
-        score += clamp(50+300*rs,0,15); reasons.append(f'20d RS vs benchmark {rs:.1%}')
-    setup=infer_setup(x)
-    return clamp(score), {'setup_type':setup, 'technical_reasons':reasons, 'last':r.to_dict()}, x
+    x = add_indicators(df)
+    if x.empty or len(x) < 60:
+        return 50, {}, x
+
+    r = x.iloc[-1]
+    score = 0
+    reasons = []
+
+    # -------------------------
+    # 1. Trend Quality: 45 pts
+    # -------------------------
+    trend_score = 0
+
+    if r.Close > r.EMA21:
+        trend_score += 12
+    if r.EMA21 > r.EMA50:
+        trend_score += 12
+    if not pd.isna(r.EMA200) and r.EMA50 > r.EMA200:
+        trend_score += 10
+
+    # EMA slope confirms trend persistence
+    ema21_slope = (x.EMA21.iloc[-1] / x.EMA21.iloc[-10] - 1) if x.EMA21.iloc[-10] else 0
+    ema50_slope = (x.EMA50.iloc[-1] / x.EMA50.iloc[-20] - 1) if x.EMA50.iloc[-20] else 0
+
+    if ema21_slope > 0:
+        trend_score += 6
+    if ema50_slope > 0:
+        trend_score += 5
+
+    score += trend_score
+    reasons.append(f"trend_quality {trend_score}/45")
+
+    # -------------------------
+    # 2. Momentum: 20 pts
+    # -------------------------
+    momentum_score = 0
+
+    if r.MACD > r.MACDsig:
+        momentum_score += 7
+    if r.RSI > 50:
+        momentum_score += 7
+    if r.StochK > r.StochD:
+        momentum_score += 6
+
+    score += momentum_score
+    reasons.append(f"momentum {momentum_score}/20")
+
+    # -------------------------
+    # 3. Entry Quality: 20 pts
+    # -------------------------
+    entry_score = 0
+
+    near_ema21 = abs(r.Close - r.EMA21) / r.Close < 0.035
+    near_ema50 = abs(r.Close - r.EMA50) / r.Close < 0.05
+
+    if r.Close > r.DonchianHigh:
+        entry_score += 12
+        reasons.append("20d breakout")
+    elif near_ema21 and r.Close > r.EMA50:
+        entry_score += 10
+        reasons.append("pullback near EMA21")
+    elif near_ema50 and r.Close > r.EMA200:
+        entry_score += 7
+        reasons.append("deeper pullback near EMA50")
+
+    if bool(r.Squeeze):
+        entry_score += 5
+        reasons.append("squeeze")
+
+    if r.RSI > 75:
+        entry_score -= 5
+        reasons.append("overbought entry risk")
+
+    score += max(0, entry_score)
+    reasons.append(f"entry_quality {entry_score}/20")
+
+    # -------------------------
+    # 4. Relative Strength: 15 pts
+    # -------------------------
+    rs_score = 7.5
+
+    if spy_df is not None and not spy_df.empty and len(spy_df) > 30:
+        rs = (
+            df.Close.iloc[-1] / df.Close.iloc[-21] - 1
+        ) - (
+            spy_df.Close.iloc[-1] / spy_df.Close.iloc[-21] - 1
+        )
+
+        # Convert RS into 0-15 score
+        rs_score = clamp(7.5 + 250 * rs, 0, 15)
+        reasons.append(f"20d RS vs benchmark {rs:.1%}, rs_score {rs_score:.1f}/15")
+
+    score += rs_score
+
+    setup = infer_setup(x)
+
+    # Override wording for strong stocks without perfect entry
+    if score >= 65 and setup == "Watchlist / no clean pattern":
+        setup = "Strong trend / no ideal entry"
+    elif score >= 65 and "Pullback" in setup:
+        setup = "Constructive pullback in uptrend"
+    elif score >= 75:
+        setup = "Strong technical uptrend"
+
+    meta = {
+        "setup_type": setup,
+        "technical_reasons": reasons,
+        "last": r.to_dict(),
+        "trend_score": round(trend_score, 1),
+        "momentum_score": round(momentum_score, 1),
+        "entry_score": round(entry_score, 1),
+        "relative_strength_score": round(rs_score, 1),
+    }
+
+    return clamp(score), meta, x
 
 def trade_levels(x, account_size=100000, risk_pct=0.005):
     r=x.iloc[-1]; atrv=float(r.ATR) if not pd.isna(r.ATR) else float(r.Close)*0.03
