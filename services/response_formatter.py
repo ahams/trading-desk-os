@@ -13,29 +13,7 @@ def _round(x: Any, ndigits: int = 2) -> Optional[float]:
 
 
 def _pct(x: Any, ndigits: int = 1) -> Optional[float]:
-    """Convert decimal ratios like 0.54 to percent like 54.0.
-
-    Use this for probabilities/IV/ratios. Do NOT use this for ev_pct
-    when expected_return_engine already returns percent units.
-    """
-    try:
-        if x is None:
-            return None
-        v = float(x)
-        if abs(v) <= 2.0:
-            v *= 100.0
-        return round(v, ndigits)
-    except Exception:
-        return None
-
-
-def _ev_pct(x: Any, ndigits: int = 1) -> Optional[float]:
-    """Expected-return percent formatter.
-
-    estimate_expected_return currently returns result['expected_return'] in decimal
-    form, e.g. -0.003 = -0.3%. If a future endpoint already passes an ev_pct
-    field in percent units, this function still behaves safely.
-    """
+    """Convert decimal return to percent. If value already looks like percent, keep it."""
     try:
         if x is None:
             return None
@@ -97,7 +75,7 @@ def _why_not_long(result: Dict[str, Any]) -> List[str]:
 
     exp_pct = _pct(expected)
     if exp_pct is not None and exp_pct < 0:
-        reasons.append(f"Expected-return model is negative ({exp_pct}%), so the reward does not justify immediate long exposure.")
+        reasons.append(f"Trade expectancy model is negative ({exp_pct}%), so the reward does not justify immediate long exposure.")
 
     theme = metas.get("theme") or {}
     theme_score = _round(theme.get("total"), 1)
@@ -121,9 +99,10 @@ def _why_not_long(result: Dict[str, Any]) -> List[str]:
 def harmonized_verdict(data: dict) -> dict:
     scores = data.get("scores", {}) or {}
     reads = data.get("reads", {}) or {}
-    expected = data.get("expected_return", {}) or {}
+    expected = data.get("trade_expectancy") or data.get("expected_return") or {}
     trade_plan = data.get("trade_plan", {}) or {}
-
+    decision_layer = data.get("decision_layer") or {}
+    
     final_score = float(data.get("final_score") or 50)
     technical = float(scores.get("technical") or 50)
     liquidity = float(scores.get("liquidity") or 50)
@@ -135,8 +114,11 @@ def harmonized_verdict(data: dict) -> dict:
 
     ev = expected.get("ev_pct")
     try:
-        # In compact response ev_pct is already percent units, e.g. -0.3 means -0.3%.
-        ev_pct = float(ev)
+        ev = float(ev)
+        if abs(ev) <= 1.5:
+            ev_pct = ev * 100
+        else:
+            ev_pct = ev
     except Exception:
         ev_pct = None
 
@@ -200,7 +182,13 @@ def harmonized_verdict(data: dict) -> dict:
         f"{data.get('ticker')}: {decision}. "
         f"Final score {final_score:.1f}/100. Setup: {setup_type}."
     )
-
+    if decision_layer:
+        thesis_parts.append(
+            f"Investment view: {decision_layer.get('investment_view')}. "
+            f"Trading view: {decision_layer.get('trading_view')}. "
+            f"Reason: {decision_layer.get('reason')} "
+            f"Action: {decision_layer.get('action')}"
+    )
     if bull_count >= 4:
         thesis_parts.append(
             "Bull case is supported by strong fundamentals, positive expectation setup, "
@@ -220,11 +208,17 @@ def harmonized_verdict(data: dict) -> dict:
 
     if ev_pct is not None:
         if ev_pct > 1:
-            thesis_parts.append(f"Expected-return model is supportive with EV around {ev_pct:.1f}%.")
+            thesis_parts.append(
+                f"Trade expectancy is favorable at {ev_pct:.1f}%."
+            )
         elif ev_pct >= 0:
-            thesis_parts.append(f"Expected-return model is only mildly positive at {ev_pct:.1f}%, so position size should be controlled.")
+            thesis_parts.append(
+                f"Trade expectancy is marginal at {ev_pct:.1f}%."
+            )
         else:
-            thesis_parts.append(f"Expected-return model is slightly negative at {ev_pct:.1f}%, so this is a watchlist/pullback setup rather than a full long signal.")
+            thesis_parts.append(
+                f"Trade expectancy is slightly negative at {ev_pct:.1f}%, suggesting a better entry may exist."
+            )
 
     if trade_plan:
         thesis_parts.append(
@@ -238,59 +232,25 @@ def harmonized_verdict(data: dict) -> dict:
         "final_thesis": " ".join(thesis_parts),
     }
 
-def _greenfield_arr_read(ticker: str, meta: Dict[str, Any]) -> str:
-    """User-facing read for greenfield growth valuation.
-
-    This is intentionally broader than NeoCloud. It covers future-capacity / ARR /
-    backlog-driven businesses such as NeoClouds, AI infrastructure suppliers,
-    energy/nuclear/space infrastructure, and other greenfield platforms.
-    """
-    meta = meta or {}
+def _greenfield_arr_read(ticker, meta):
     metrics = meta.get("metrics") or {}
-    signal = meta.get("signal") or "n/a"
-    score = _round(meta.get("score"), 1)
+    signal = meta.get("signal")
 
-    has_capacity_owner_metrics = any([
+    has_capacity_metrics = any([
         metrics.get("secured_power_mw"),
         metrics.get("gpu_count"),
         metrics.get("ev_current_arr"),
         metrics.get("ev_target_arr"),
     ])
 
-    # Capacity-owner names: CRWV/NBIS/IREN-style businesses
-    if has_capacity_owner_metrics:
+    if not has_capacity_metrics:
         return (
-            f"Greenfield ARR/capacity read for {ticker}: {signal} "
-            f"with score {score}/100. This is a capacity-owner style valuation, "
-            "where secured power, GPU fleet, backlog, ARR conversion, funding capacity, "
-            "and dilution risk drive the investment case. "
-            f"{meta.get('summary') or ''}"
-        ).strip()
+            f"Greenfield ARR/capacity read: {ticker} is not being valued as a pure "
+            "capacity-owning NeoCloud operator. ARR/MW/GPU-fleet metrics are not directly "
+            "applicable. Treat this as AI infrastructure supplier/platform exposure."
+        )
 
-    # Supplier/platform names: NVDA/MRVL/MU/AVGO-style businesses
-    margin_bits = []
-    subscores = meta.get("subscores") or {}
-    if subscores.get("unit_economics") is not None:
-        margin_bits.append(f"unit economics score {subscores.get('unit_economics')}/100")
-    if subscores.get("balance_sheet") is not None:
-        margin_bits.append(f"balance-sheet score {subscores.get('balance_sheet')}/100")
-
-    extra = f" Key supplier/platform checks: {', '.join(margin_bits)}." if margin_bits else ""
-
-    return (
-        f"Greenfield growth read for {ticker}: not a pure capacity-owner ARR model. "
-        "Treat this as supplier/platform exposure to greenfield AI infrastructure demand. "
-        "ARR/MW/GPU-fleet metrics are not directly applicable; the relevant questions are "
-        "demand durability, margin quality, customer capex cycle, product leadership, and balance-sheet strength."
-        + extra
-    )
-
-
-def _greenfield_arr_label(meta: Dict[str, Any]) -> str:
-    metrics = (meta or {}).get("metrics") or {}
-    if any([metrics.get("secured_power_mw"), metrics.get("gpu_count"), metrics.get("ev_current_arr"), metrics.get("ev_target_arr")]):
-        return "Capacity-owner ARR model"
-    return "Supplier/platform greenfield exposure"
+    return meta.get("summary")
 
 
 def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -364,13 +324,16 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
         "invalidates_if": blockers[:3] if blockers else ["Breaks stop or thesis drivers deteriorate."],
     }
 
-    expected_return = {
-        "ev_pct": _ev_pct(result.get("expected_return")),
+    # This is short-term trade expectancy, not long-term investment expected return.
+    trade_expectancy = {
+        "ev_pct": _pct(result.get("expected_return")),
         "expected_r": _round(result.get("expected_r"), 2),
         "probability_win": _pct(result.get("probability_win")),
         "read": summary.get("expected_return"),
     }
 
+    # Backward-compatible alias for older frontend/API clients.
+    expected_return = trade_expectancy
     participant_map = game_meta.get("participant_map") or {}
     dominant_participants = {}
     for k, v in participant_map.items():
@@ -390,6 +353,7 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
         "regime": result.get("regime"),
         "theme": result.get("theme"),
         "trade_plan": trade_plan,
+        "trade_expectancy": trade_expectancy,
         "expected_return": expected_return,
         "scores": {
             "fundamental": _round(scores.get("fundamental"), 1),
@@ -413,7 +377,7 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
             "catalyst": summary.get("catalyst"),
             "expectation": expected_meta.get("expectation_read") or summary.get("expectation"),
             "merton_credit": merton_meta.get("summary") or summary.get("merton"),
-            "greenfield_arr_valuation": _greenfield_arr_read(result.get("ticker", ""), neocloud_meta),
+            "greenfield_arr_valuation": _greenfield_arr_read(result.get("ticker"), neocloud_meta),
             "theme": theme_meta.get("summary"),
         },
         "options_snapshot": {
@@ -443,7 +407,6 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
         "greenfield_arr_snapshot": {
             "score": _round(neocloud_meta.get("score"), 1),
             "signal": neocloud_meta.get("signal"),
-            "model_type": _greenfield_arr_label(neocloud_meta),
             "subscores": neocloud_meta.get("subscores") or {},
             "ev_current_arr": _round((neocloud_meta.get("metrics") or {}).get("ev_current_arr"), 2),
             "ev_target_arr": _round((neocloud_meta.get("metrics") or {}).get("ev_target_arr"), 2),
@@ -452,11 +415,15 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
         },
         "final_thesis": result.get("thesis"),
     }
+    
+    decision_layer = split_investment_vs_trading_view(compact)
+
     verdict = harmonized_verdict(compact)
 
     compact["decision"] = verdict["decision"]
     compact["setup_type"] = verdict["setup_type"]
-    compact["final_thesis"] = verdict["final_thesis"]   
+    compact["final_thesis"] = verdict["final_thesis"]  
+    compact["decision_layer"] = decision_layer 
     return compact
 
 
@@ -469,4 +436,83 @@ def compact_scanner(scan_result: Dict[str, Any], top_n: int = 20) -> Dict[str, A
         "count": len(compact_rows),
         "results": compact_rows,
         "errors": scan_result.get("errors", []),
+    }
+
+def split_investment_vs_trading_view(data: dict) -> dict:
+    scores = data.get("scores", {}) or {}
+    trade = data.get("trade_expectancy") or data.get("expected_return") or {}
+
+    fundamental = float(scores.get("fundamental") or 50)
+    expectation = float(scores.get("expectation") or 50)
+    merton = float(scores.get("merton_credit") or 50)
+    greenfield = float(scores.get("greenfield_arr_valuation") or 50)
+
+    technical = float(scores.get("technical") or 50)
+    liquidity = float(scores.get("liquidity") or 50)
+    options = float(scores.get("options") or 50)
+    game = float(scores.get("game_theory") or 50)
+
+    ev = trade.get("ev_pct")
+    try:
+        ev = float(ev)
+    except Exception:
+        ev = None
+
+    investment_score = round(
+        0.35 * fundamental
+        + 0.25 * expectation
+        + 0.25 * merton
+        + 0.15 * greenfield,
+        1,
+    )
+
+    trading_score = round(
+        0.35 * technical
+        + 0.25 * liquidity
+        + 0.20 * options
+        + 0.20 * game,
+        1,
+    )
+
+    if investment_score >= 70:
+        investment_view = "Bullish"
+    elif investment_score >= 55:
+        investment_view = "Constructive"
+    elif investment_score <= 40:
+        investment_view = "Bearish"
+    else:
+        investment_view = "Neutral"
+
+    if trading_score >= 70 and (ev is None or ev > 0):
+        trading_view = "Bullish"
+    elif trading_score >= 55:
+        trading_view = "Neutral / Wait for confirmation"
+    elif trading_score <= 40:
+        trading_view = "Bearish"
+    else:
+        trading_view = "Neutral"
+
+    if investment_view in ["Bullish", "Constructive"] and "Neutral" in trading_view:
+        reason = "Business quality and capital structure are supportive, but near-term trading confirmation is incomplete."
+        action = "Accumulate on pullbacks or wait for a cleaner breakout/reclaim."
+    elif investment_view == "Bullish" and trading_view == "Bullish":
+        reason = "Business quality and near-term trading setup are aligned."
+        action = "Tactical long is justified with defined stop and target."
+    elif investment_view in ["Neutral", "Bearish"] and trading_view == "Bullish":
+        reason = "Near-term momentum is strong, but investment quality is not fully supportive."
+        action = "Treat as a tactical trade only, not a core position."
+    elif investment_view == "Bearish" and trading_view in ["Bearish", "Neutral"]:
+        reason = "Both investment quality and trading setup are weak."
+        action = "Avoid or consider short setups only after confirmation."
+    else:
+        reason = "Signals are mixed across business quality and trading setup."
+        action = "Keep on watchlist until alignment improves."
+
+    return {
+        "investment_score": investment_score,
+        "trading_score": trading_score,
+        "investment_view": investment_view,
+        "trading_view": trading_view,
+        "reason": reason,
+        "action": action,
     }

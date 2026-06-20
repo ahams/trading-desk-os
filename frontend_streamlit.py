@@ -220,7 +220,7 @@ def render_analysis_card(data: Dict[str, Any]) -> None:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Decision", decision)
     c2.metric("Final Score", safe_metric_value(data.get("final_score"), 1))
-    c3.metric("Expected Return", fmt_pct(expected.get("ev_pct")))
+    c3.metric("Trade Expectancy", f"{expected.get('ev_pct', 'n/a')}%")
     c4.metric("Win Probability", fmt_pct(expected.get("probability_win")))
 
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -230,6 +230,29 @@ def render_analysis_card(data: Dict[str, Any]) -> None:
     c4.metric("Target 2", fmt_num(trade_plan.get("target2")))
     c5.metric("Risk/Reward", fmt_num(trade_plan.get("risk_reward")))
 
+    decision_layer = data.get("decision_layer") or {}
+
+    if decision_layer:
+        st.markdown("### Decision Layer")
+
+        c1, c2 = st.columns(2)
+        c1.metric(
+            "Investment View",
+            decision_layer.get("investment_view", "n/a"),
+            f"{decision_layer.get('investment_score', 'n/a')}/100",
+        )
+        c2.metric(
+            "Trading View",
+            decision_layer.get("trading_view", "n/a"),
+            f"{decision_layer.get('trading_score', 'n/a')}/100",
+        )
+
+        st.markdown("**Reason**")
+        st.write(decision_layer.get("reason", "n/a"))
+
+        st.markdown("**Action**")
+        st.success(decision_layer.get("action", "n/a"))
+    
     tech_snap = data.get("technical_snapshot") or {}
     if tech_snap:
         st.markdown("### Technical Decomposition")
@@ -254,9 +277,9 @@ def render_analysis_card(data: Dict[str, Any]) -> None:
                 st.write("Distance to Default:", cap.get("distance_to_default", "n/a"))
                 st.write("Annual PD Proxy:", cap.get("pd_annual_proxy_pct", "n/a"))
         with cols[1]:
-            if neo and neo.get("signal") != "Not a NeoCloud-specific name":
-                st.markdown("**NeoCloud Valuation**")
-                st.metric("NeoCloud Score", safe_metric_value(neo.get("score"), 1))
+            if neo and neo.get("signal") != "Not a Greenfield ARR/Capacity Valuation specific name":
+                st.markdown("**Greenfield ARR/Capacity**")
+                st.metric("Greenfield Score", safe_metric_value(neo.get("score"), 1))
                 st.caption(neo.get("signal", "n/a"))
                 st.write("EV / Current ARR:", neo.get("ev_current_arr", "n/a"))
                 st.write("EV / Target ARR:", neo.get("ev_target_arr", "n/a"))
@@ -341,7 +364,7 @@ def to_scanner_df(resp: Any) -> pd.DataFrame:
             if k in trade_plan:
                 r[k] = trade_plan[k]
         if isinstance(expected, dict):
-            r["ev_pct"] = expected.get("ev_pct")
+            r["ev_pct"] = f"{expected.get('ev_pct', 'n/a')}%"
             r["expected_r"] = expected.get("expected_r")
             r["probability_win"] = expected.get("probability_win")
         elif expected is not None:
@@ -398,7 +421,7 @@ st.sidebar.caption("Tip: set TDOS_API_URL and TDOS_API_KEY in Railway variables 
 # =============================================================================
 
 st.title("📈 Trading Desk OS Beta")
-st.caption("Multi-factor trade decision engine: regime, theme, fundamentals, technicals, liquidity, options, game theory, Merton credit, NeoCloud valuation, and expected return.")
+st.caption("Multi-factor trade decision engine: regime, theme, fundamentals, technicals, liquidity, options, game theory, Merton credit,  Greenfield ARR / Capacity Valuation, and expected return.")
 
 account_tab, analyze_tab, scanner_tab, report_tab, history_tab = st.tabs(
     ["Account", "Analyze Stock", "Scanner", "Daily Report", "Signal History"]
