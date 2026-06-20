@@ -13,7 +13,29 @@ def _round(x: Any, ndigits: int = 2) -> Optional[float]:
 
 
 def _pct(x: Any, ndigits: int = 1) -> Optional[float]:
-    """Convert decimal return to percent. If value already looks like percent, keep it."""
+    """Convert decimal ratios like 0.54 to percent like 54.0.
+
+    Use this for probabilities/IV/ratios. Do NOT use this for ev_pct
+    when expected_return_engine already returns percent units.
+    """
+    try:
+        if x is None:
+            return None
+        v = float(x)
+        if abs(v) <= 2.0:
+            v *= 100.0
+        return round(v, ndigits)
+    except Exception:
+        return None
+
+
+def _ev_pct(x: Any, ndigits: int = 1) -> Optional[float]:
+    """Expected-return percent formatter.
+
+    estimate_expected_return currently returns result['expected_return'] in decimal
+    form, e.g. -0.003 = -0.3%. If a future endpoint already passes an ev_pct
+    field in percent units, this function still behaves safely.
+    """
     try:
         if x is None:
             return None
@@ -90,11 +112,185 @@ def _why_not_long(result: Dict[str, Any]) -> List[str]:
     neocloud = metas.get("neocloud") or {}
     neocloud_score = _round(neocloud.get("score"), 1)
     if neocloud_score is not None and neocloud_score < 50 and neocloud.get("signal") != "Not a NeoCloud-specific name":
-        reasons.append(f"NeoCloud valuation/funding quality is weak ({neocloud_score}/100): {neocloud.get('signal', 'valuation risk')}.")
+        reasons.append(f"Greenfield ARR/capacity valuation quality is weak ({neocloud_score}/100): {neocloud.get('signal', 'valuation risk')}.")
 
     if not reasons:
         reasons.append("No major blocker detected; decision is mainly constrained by final score/threshold discipline.")
     return reasons
+
+def harmonized_verdict(data: dict) -> dict:
+    scores = data.get("scores", {}) or {}
+    reads = data.get("reads", {}) or {}
+    expected = data.get("expected_return", {}) or {}
+    trade_plan = data.get("trade_plan", {}) or {}
+
+    final_score = float(data.get("final_score") or 50)
+    technical = float(scores.get("technical") or 50)
+    liquidity = float(scores.get("liquidity") or 50)
+    options = float(scores.get("options") or 50)
+    game = float(scores.get("game_theory") or scores.get("game") or 50)
+    fundamental = float(scores.get("fundamental") or 50)
+    expectation = float(scores.get("expectation") or 50)
+    merton = float(scores.get("merton_credit") or scores.get("merton") or 50)
+
+    ev = expected.get("ev_pct")
+    try:
+        # In compact response ev_pct is already percent units, e.g. -0.3 means -0.3%.
+        ev_pct = float(ev)
+    except Exception:
+        ev_pct = None
+
+    bull_count = 0
+    bear_count = 0
+
+    if fundamental >= 75:
+        bull_count += 1
+    if technical >= 60:
+        bull_count += 1
+    if liquidity >= 60:
+        bull_count += 1
+    if expectation >= 65:
+        bull_count += 1
+    if merton >= 70:
+        bull_count += 1
+    if ev_pct is not None and ev_pct > 0:
+        bull_count += 1
+
+    if options < 35:
+        bear_count += 1
+    if game < 50:
+        bear_count += 1
+    if technical < 45:
+        bear_count += 1
+    if liquidity < 45:
+        bear_count += 1
+    if ev_pct is not None and ev_pct < 0:
+        bear_count += 1
+
+    # Harmonized decision
+    if final_score >= 70 and bull_count >= 4 and (ev_pct is None or ev_pct > 1):
+        decision = "Strong Long"
+    elif final_score >= 60 and bull_count >= 4 and bear_count <= 2:
+        if ev_pct is not None and ev_pct <= 0:
+            decision = "Constructive Watchlist"
+        else:
+            decision = "Tactical Long"
+    elif final_score >= 55 and bull_count >= 3:
+        decision = "Constructive Watchlist"
+    elif final_score <= 35:
+        decision = "Avoid / Tactical Short"
+    else:
+        decision = data.get("decision", "Watchlist Only")
+
+    # Better setup wording
+    if technical >= 60 and liquidity >= 60 and options < 35:
+        setup_type = "Strong trend, weak options confirmation"
+    elif technical >= 60 and liquidity >= 60:
+        setup_type = "Constructive trend continuation"
+    elif technical >= 60 and liquidity < 50:
+        setup_type = "Trend intact, liquidity not confirming"
+    elif technical < 50 and final_score >= 60:
+        setup_type = "Good stock, poor current entry"
+    else:
+        setup_type = data.get("setup_type", "Watchlist / no clean pattern")
+
+    thesis_parts = []
+
+    thesis_parts.append(
+        f"{data.get('ticker')}: {decision}. "
+        f"Final score {final_score:.1f}/100. Setup: {setup_type}."
+    )
+
+    if bull_count >= 4:
+        thesis_parts.append(
+            "Bull case is supported by strong fundamentals, positive expectation setup, "
+            "healthy capital structure, and constructive liquidity/technical backdrop."
+        )
+
+    if options < 35:
+        thesis_parts.append(
+            "Main caution is options positioning: put demand / defensive skew is elevated, "
+            "so equity strength is not fully confirmed by the options tape."
+        )
+
+    if game < 50:
+        thesis_parts.append(
+            "Forced-flow/game-theory confirmation is still weak, so this is not yet a clean squeeze setup."
+        )
+
+    if ev_pct is not None:
+        if ev_pct > 1:
+            thesis_parts.append(f"Expected-return model is supportive with EV around {ev_pct:.1f}%.")
+        elif ev_pct >= 0:
+            thesis_parts.append(f"Expected-return model is only mildly positive at {ev_pct:.1f}%, so position size should be controlled.")
+        else:
+            thesis_parts.append(f"Expected-return model is slightly negative at {ev_pct:.1f}%, so this is a watchlist/pullback setup rather than a full long signal.")
+
+    if trade_plan:
+        thesis_parts.append(
+            f"Trade plan: entry {trade_plan.get('entry')}, stop {trade_plan.get('stop')}, "
+            f"target1 {trade_plan.get('target1')}, target2 {trade_plan.get('target2')}."
+        )
+
+    return {
+        "decision": decision,
+        "setup_type": setup_type,
+        "final_thesis": " ".join(thesis_parts),
+    }
+
+def _greenfield_arr_read(ticker: str, meta: Dict[str, Any]) -> str:
+    """User-facing read for greenfield growth valuation.
+
+    This is intentionally broader than NeoCloud. It covers future-capacity / ARR /
+    backlog-driven businesses such as NeoClouds, AI infrastructure suppliers,
+    energy/nuclear/space infrastructure, and other greenfield platforms.
+    """
+    meta = meta or {}
+    metrics = meta.get("metrics") or {}
+    signal = meta.get("signal") or "n/a"
+    score = _round(meta.get("score"), 1)
+
+    has_capacity_owner_metrics = any([
+        metrics.get("secured_power_mw"),
+        metrics.get("gpu_count"),
+        metrics.get("ev_current_arr"),
+        metrics.get("ev_target_arr"),
+    ])
+
+    # Capacity-owner names: CRWV/NBIS/IREN-style businesses
+    if has_capacity_owner_metrics:
+        return (
+            f"Greenfield ARR/capacity read for {ticker}: {signal} "
+            f"with score {score}/100. This is a capacity-owner style valuation, "
+            "where secured power, GPU fleet, backlog, ARR conversion, funding capacity, "
+            "and dilution risk drive the investment case. "
+            f"{meta.get('summary') or ''}"
+        ).strip()
+
+    # Supplier/platform names: NVDA/MRVL/MU/AVGO-style businesses
+    margin_bits = []
+    subscores = meta.get("subscores") or {}
+    if subscores.get("unit_economics") is not None:
+        margin_bits.append(f"unit economics score {subscores.get('unit_economics')}/100")
+    if subscores.get("balance_sheet") is not None:
+        margin_bits.append(f"balance-sheet score {subscores.get('balance_sheet')}/100")
+
+    extra = f" Key supplier/platform checks: {', '.join(margin_bits)}." if margin_bits else ""
+
+    return (
+        f"Greenfield growth read for {ticker}: not a pure capacity-owner ARR model. "
+        "Treat this as supplier/platform exposure to greenfield AI infrastructure demand. "
+        "ARR/MW/GPU-fleet metrics are not directly applicable; the relevant questions are "
+        "demand durability, margin quality, customer capex cycle, product leadership, and balance-sheet strength."
+        + extra
+    )
+
+
+def _greenfield_arr_label(meta: Dict[str, Any]) -> str:
+    metrics = (meta or {}).get("metrics") or {}
+    if any([metrics.get("secured_power_mw"), metrics.get("gpu_count"), metrics.get("ev_current_arr"), metrics.get("ev_target_arr")]):
+        return "Capacity-owner ARR model"
+    return "Supplier/platform greenfield exposure"
 
 
 def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -140,7 +336,7 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
     if scores.get("merton") and float(scores.get("merton")) >= 70:
         bull_points.append(f"Capital structure supportive / low credit risk ({_round(scores.get('merton'), 1)}/100).")
     if scores.get("neocloud") and float(scores.get("neocloud")) >= 70:
-        bull_points.append(f"NeoCloud capacity/ARR valuation supportive ({_round(scores.get('neocloud'), 1)}/100).")
+        bull_points.append(f"Greenfield ARR/capacity valuation supportive ({_round(scores.get('neocloud'), 1)}/100).")
     if result.get("regime"):
         bull_points.append(f"Market regime: {result.get('regime')}.")
 
@@ -156,7 +352,7 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
     if scores.get("merton") and float(scores.get("merton")) < 50:
         bear_points.append(f"Capital-structure risk elevated ({_round(scores.get('merton'), 1)}/100).")
     if scores.get("neocloud") and float(scores.get("neocloud")) < 50 and neocloud_meta.get("signal") != "Not a NeoCloud-specific name":
-        bear_points.append(f"NeoCloud valuation/funding risk elevated ({_round(scores.get('neocloud'), 1)}/100).")
+        bear_points.append(f"Greenfield ARR/capacity valuation risk elevated ({_round(scores.get('neocloud'), 1)}/100).")
 
     trade_plan = {
         "entry": _round(result.get("entry"), 2),
@@ -169,7 +365,7 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     expected_return = {
-        "ev_pct": _pct(result.get("expected_return")),
+        "ev_pct": _ev_pct(result.get("expected_return")),
         "expected_r": _round(result.get("expected_r"), 2),
         "probability_win": _pct(result.get("probability_win")),
         "read": summary.get("expected_return"),
@@ -204,7 +400,7 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
             "catalyst": _round(scores.get("catalyst"), 1),
             "expectation": _round(scores.get("expectation"), 1),
             "merton_credit": _round(scores.get("merton"), 1),
-            "neocloud_valuation": _round(scores.get("neocloud"), 1),
+            "greenfield_arr_valuation": _round(scores.get("neocloud"), 1),
         },
         "main_bull_case": bull_points[:5] or [summary.get("fundamental") or "No clear bull case detected."],
         "main_bear_case": bear_points[:5] or ["No major bearish factor detected."],
@@ -217,7 +413,7 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
             "catalyst": summary.get("catalyst"),
             "expectation": expected_meta.get("expectation_read") or summary.get("expectation"),
             "merton_credit": merton_meta.get("summary") or summary.get("merton"),
-            "neocloud_valuation": neocloud_meta.get("summary") or summary.get("neocloud"),
+            "greenfield_arr_valuation": _greenfield_arr_read(result.get("ticker", ""), neocloud_meta),
             "theme": theme_meta.get("summary"),
         },
         "options_snapshot": {
@@ -244,9 +440,10 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
             "pd_annual_proxy_pct": _pct((merton_meta.get("metrics") or {}).get("pd_annual_proxy")),
             "net_debt_to_market_cap_pct": _pct((merton_meta.get("metrics") or {}).get("net_debt_to_market_cap")),
         },
-        "neocloud_snapshot": {
+        "greenfield_arr_snapshot": {
             "score": _round(neocloud_meta.get("score"), 1),
             "signal": neocloud_meta.get("signal"),
+            "model_type": _greenfield_arr_label(neocloud_meta),
             "subscores": neocloud_meta.get("subscores") or {},
             "ev_current_arr": _round((neocloud_meta.get("metrics") or {}).get("ev_current_arr"), 2),
             "ev_target_arr": _round((neocloud_meta.get("metrics") or {}).get("ev_target_arr"), 2),
@@ -255,6 +452,11 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
         },
         "final_thesis": result.get("thesis"),
     }
+    verdict = harmonized_verdict(compact)
+
+    compact["decision"] = verdict["decision"]
+    compact["setup_type"] = verdict["setup_type"]
+    compact["final_thesis"] = verdict["final_thesis"]   
     return compact
 
 
