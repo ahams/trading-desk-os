@@ -331,10 +331,14 @@ def analyze_stock(
         **row,
         "price": round(spot, 2),
         "scores": scores,
-        "expected_return": er.get("expected_return"),
-        "expected_return_pct": er.get("expected_return_pct"),
+        "expected_return": er.get("expected_return"),  # legacy scenario EV
         "expected_r": er.get("expected_r"),
         "probability_win": er.get("probability_win"),
+
+        "trade_expectancy_pct": er.get("trade_expectancy_pct"),
+        "trade_expectancy_r": er.get("trade_expectancy_r"),
+        "reward_pct": er.get("reward_pct"),
+        "risk_pct": er.get("risk_pct"),
         "regime": regime_result.get("regime"),
         "theme": (theme_meta.get("metrics") or {}).get("theme") or theme_meta.get("theme"),
         "summary": {

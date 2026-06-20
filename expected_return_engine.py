@@ -248,6 +248,40 @@ def estimate_expected_return(
 
     expected_return = p_bull * bull_ret + p_base * base_ret + p_bear * bear_ret
 
+    # ------------------------------------------------------------
+# Trade expectancy from actual trade plan
+# ------------------------------------------------------------
+    entry = levels.get("entry")
+    stop = levels.get("stop")
+    target2 = levels.get("target2")
+
+    trade_expectancy_pct = None
+    trade_expectancy_r = None
+    reward_pct = None
+    risk_pct = None
+
+    try:
+        if entry and stop and target2:
+            if direction == "SHORT":
+                risk_pct = abs(stop - entry) / entry
+                reward_pct = abs(entry - target2) / entry
+            else:
+                risk_pct = abs(entry - stop) / entry
+                reward_pct = abs(target2 - entry) / entry
+
+            trade_expectancy_pct = (
+                p_win * reward_pct
+                - (1.0 - p_win) * risk_pct
+            )
+
+            trade_expectancy_r = (
+                trade_expectancy_pct / risk_pct
+                if risk_pct and risk_pct > 0
+                else None
+            )
+    except Exception:
+        pass
+    
     risk_per_share = None
     shares = 0
     position_value = 0.0
@@ -312,6 +346,10 @@ def estimate_expected_return(
         "position_value": position_value,
         "risk_per_share": risk_per_share,
         **levels,
+        "reward_pct": reward_pct,
+        "risk_pct": risk_pct,
+        "trade_expectancy_pct": trade_expectancy_pct,
+        "trade_expectancy_r": trade_expectancy_r,
     }
 
     summary = (
@@ -324,8 +362,17 @@ def estimate_expected_return(
     return {
         "total": round(total, 1),
         "decision": decision,
+
+        # old scenario expectancy
         "expected_return": round(expected_return, 4),
         "expected_r": round(expected_r, 2) if expected_r is not None else None,
+
+        # new actual trade-plan expectancy
+        "trade_expectancy_pct": round(trade_expectancy_pct, 4) if trade_expectancy_pct is not None else None,
+        "trade_expectancy_r": round(trade_expectancy_r, 2) if trade_expectancy_r is not None else None,
+        "reward_pct": round(reward_pct, 4) if reward_pct is not None else None,
+        "risk_pct": round(risk_pct, 4) if risk_pct is not None else None,
+
         "probability_win": round(p_win, 3),
         "levels": levels,
         "position_size": {"shares": shares, "position_value": round(position_value, 2)},

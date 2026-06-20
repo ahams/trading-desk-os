@@ -326,9 +326,12 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
 
     # This is short-term trade expectancy, not long-term investment expected return.
     trade_expectancy = {
-        "ev_pct": _pct(result.get("expected_return")),
-        "expected_r": _round(result.get("expected_r"), 2),
+        "trade_expectancy_pct": _pct(result.get("trade_expectancy_pct")),
+        "trade_expectancy_r": _round(result.get("trade_expectancy_r"), 2),
+        "reward_pct": _pct(result.get("reward_pct")),
+        "risk_pct": _pct(result.get("risk_pct")),
         "probability_win": _pct(result.get("probability_win")),
+        "legacy_scenario_ev_pct": _pct(result.get("expected_return")),
         "read": summary.get("expected_return"),
     }
 
@@ -354,7 +357,7 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
         "theme": result.get("theme"),
         "trade_plan": trade_plan,
         "trade_expectancy": trade_expectancy,
-        "expected_return": expected_return,
+        "expected_return": trade_expectancy,#legacy compatablity
         "scores": {
             "fundamental": _round(scores.get("fundamental"), 1),
             "technical": _round(scores.get("technical"), 1),

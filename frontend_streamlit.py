@@ -196,7 +196,7 @@ def render_analysis_card(data: Dict[str, Any]) -> None:
     theme = data.get("theme", "n/a")
 
     trade_plan = data.get("trade_plan") or {}
-    expected = data.get("expected_return") or {}
+    expected = data.get("trade_expectancy") or data.get("expected_return") or {}
     scores = data.get("scores") or {}
     reads = data.get("reads") or {}
 
@@ -220,8 +220,19 @@ def render_analysis_card(data: Dict[str, Any]) -> None:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Decision", decision)
     c2.metric("Final Score", safe_metric_value(data.get("final_score"), 1))
-    c3.metric("Trade Expectancy", f"{expected.get('ev_pct', 'n/a')}%")
+    te = expected.get("trade_expectancy_pct")
+    te_r = expected.get("trade_expectancy_r")
+    c3.metric(
+        "Trade Expectancy",
+        "n/a" if te is None else f"{float(te):.1f}%",
+        "n/a" if te_r is None else f"{float(te_r):.2f}R",
+    )
     c4.metric("Win Probability", fmt_pct(expected.get("probability_win")))
+    
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Reward %", expected.get("reward_pct", "n/a"))
+    c2.metric("Risk %", expected.get("risk_pct", "n/a"))
+    c3.metric("Scenario EV", expected.get("legacy_scenario_ev_pct", "n/a"))
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Entry", fmt_num(trade_plan.get("entry")))
