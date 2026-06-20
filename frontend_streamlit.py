@@ -28,6 +28,21 @@ import pandas as pd
 import requests
 import streamlit as st
 
+# =============================================================================
+# helper notes for toltip
+#==============================================================================
+HELP = {
+    "decision": "Final TDOS classification after combining investment quality, trading setup, positioning, liquidity, and risk.",
+    "final_score": "Composite score from 0–100. Higher means stronger overall opportunity after combining all engines.",
+    "trade_expectancy": "Expected value of the current trade plan using entry, stop, target, and win probability. This is not long-term expected return.",
+    "win_probability": "Estimated probability that the trade reaches its favorable outcome before invalidation.",
+    "reward_pct": "Potential upside from entry to Target 2.",
+    "risk_pct": "Potential downside from entry to stop loss.",
+    "scenario_ev": "Legacy scenario-based expected value using bull/base/bear outcomes. Useful as a secondary check.",
+    "investment_view": "Longer-term business/investment view based on fundamentals, expectations, capital structure, and greenfield growth.",
+    "trading_view": "Near-term tactical view based on technicals, liquidity, options positioning, and game-theory/participant behavior.",
+}
+
 
 # =============================================================================
 # Page Config
@@ -218,21 +233,25 @@ def render_analysis_card(data: Dict[str, Any]) -> None:
     )
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Decision", decision)
-    c2.metric("Final Score", safe_metric_value(data.get("final_score"), 1))
+    
+    c1.metric("Decision ⓘ", data.get("decision", "n/a"), help=HELP["decision"])
+    c2.metric("Final Score ⓘ", data.get("final_score", "n/a"), help=HELP["final_score"])
     te = expected.get("trade_expectancy_pct")
     te_r = expected.get("trade_expectancy_r")
     c3.metric(
-        "Trade Expectancy",
+        "Trade Expectancy ⓘ",
         "n/a" if te is None else f"{float(te):.1f}%",
         "n/a" if te_r is None else f"{float(te_r):.2f}R",
+        help=HELP["trade_expectancy"],
     )
-    c4.metric("Win Probability", fmt_pct(expected.get("probability_win")))
+    c4.metric("Win Probability", fmt_pct(expected.get("probability_win")),help=HELP["win_probability"])
+    
+    
     
     c1, c2, c3 = st.columns(3)
-    c1.metric("Reward %", expected.get("reward_pct", "n/a"))
-    c2.metric("Risk %", expected.get("risk_pct", "n/a"))
-    c3.metric("Scenario EV", expected.get("legacy_scenario_ev_pct", "n/a"))
+    c1.metric("Reward %", expected.get("reward_pct", "n/a"),help=HELP["reward_pct"])
+    c2.metric("Risk %", expected.get("risk_pct", "n/a"),help=HELP["risk_pct"])
+    c3.metric("Scenario EV", expected.get("legacy_scenario_ev_pct", "n/a"),help=HELP["scenario_ev"])
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Entry", fmt_num(trade_plan.get("entry")))
@@ -248,14 +267,16 @@ def render_analysis_card(data: Dict[str, Any]) -> None:
 
         c1, c2 = st.columns(2)
         c1.metric(
-            "Investment View",
+            "Investment View ⓘ",
             decision_layer.get("investment_view", "n/a"),
             f"{decision_layer.get('investment_score', 'n/a')}/100",
+            help=HELP["investment_view"],
         )
         c2.metric(
-            "Trading View",
+            "Trading View ⓘ",
             decision_layer.get("trading_view", "n/a"),
             f"{decision_layer.get('trading_score', 'n/a')}/100",
+            help=HELP["trading_view"],
         )
 
         st.markdown("**Reason**")
