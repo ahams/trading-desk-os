@@ -32,9 +32,9 @@ try:
     from engines.entry_quality_engine import analyze_entry_quality
     from engines.leadership_engine import analyze_leadership
 except Exception:
-    from trend_quality_engine import analyze_trend_quality
-    from entry_quality_engine import analyze_entry_quality
-    from leadership_engine import analyze_leadership
+    from engines.trend_quality_engine import analyze_trend_quality
+    from engines.entry_quality_engine import analyze_entry_quality
+    from engines.leadership_engine import analyze_leadership
 logger = logging.getLogger("trading_desk.api.analysis")
 
 DEFAULT_WEIGHTS = {
