@@ -874,9 +874,8 @@ st.sidebar.caption("Tip: set TDOS_API_URL and TDOS_API_KEY in Railway variables 
 st.title("📈 Trading Desk OS Beta")
 st.caption("Multi-factor trade decision engine: regime, theme, fundamentals, technicals, liquidity, options, game theory, Merton credit,  Greenfield ARR / Capacity Valuation, and expected return.")
 
-account_tab, analyze_tab, scanner_tab, report_tab, history_tab = st.tabs(
-    ["Account", "Analyze Stock", "Scanner", "Daily Report", "Signal History"]
-)
+account_tab, analyze_tab, scanner_tab, report_tab = st.tabs(["Account", "Analyze Stock",
+                                                             "Scanner", "Daily Report"]) #, history_tab,, "Signal History"
 
 
 # =============================================================================
@@ -1012,76 +1011,6 @@ with scanner_tab:
 # Daily Report
 # =============================================================================
 
-# with report_tab:
-#     st.header("Daily Report")
-
-#     c1, c2 = st.columns([3, 1])
-
-#     report_tickers_text = c1.text_area(
-#         "Report tickers",
-#         value="NVDA, AMD, AVGO, ANET, MRVL, MU, GOOGL, AMZN, AAPL, MSFT",
-#         height=100,
-#     )
-
-#     report_max_names = c2.number_input(
-#         "Max report names",
-#         min_value=1,
-#         max_value=100,
-#         value=20,
-#         step=1,
-#     )
-
-#     report_tickers = [
-#         t.strip().upper()
-#         for t in report_tickers_text.replace("\n", ",").split(",")
-#         if t.strip()
-#     ]
-
-#     if st.button("Generate Daily Report", type="primary", use_container_width=True):
-#         if not report_tickers:
-#             st.warning("Enter at least one ticker.")
-#         else:
-#             payload = {
-#                 "tickers": report_tickers[: int(report_max_names)],
-#                 "max_names": int(report_max_names),
-#                 "compact": True,
-#             }
-
-#             with st.spinner(f"Generating report for {len(payload['tickers'])} tickers..."):
-#                 ok, resp = api_request(
-#                     "POST",
-#                     "/api/v1/report/daily",
-#                     payload=payload,
-#                     timeout=300,
-#                 )
-
-#             if ok:
-#                 data = extract_data(resp)
-
-#                 results = []
-#                 if isinstance(data, dict):
-#                     results = (
-#                         data.get("results")
-#                         or data.get("scanner_results")
-#                         or data.get("data", {}).get("results", [])
-#                     )
-
-#                 if results:
-#                     df_report = to_scanner_df({"results": results})
-
-#                     render_metric_strip(df_report)
-#                     render_opportunity_matrix(df_report)
-#                     render_theme_heatmap(df_report)
-#                     render_risk_radar(df_report)
-#                     render_action_cards(df_report)
-
-#                     with st.expander("Full Daily Report Table"):
-#                         render_scanner_tables(df_report)
-#                 else:
-#                     st.warning("Daily report returned no result rows.")
-#                     st.json(resp)
-#             else:
-#                 show_error(resp)
 with report_tab:
     st.header("Daily Report")
 
@@ -1131,57 +1060,57 @@ with report_tab:
 # Signal History Placeholder
 # =============================================================================
 
-with history_tab:
-    st.header("Signal History")
+# with history_tab:
+#     st.header("Signal History")
 
-    c1, c2 = st.columns([2, 1])
-    hist_ticker = c1.text_input("Ticker filter", value="")
-    hist_limit = c2.number_input("Limit", min_value=10, max_value=500, value=100, step=10)
+#     c1, c2 = st.columns([2, 1])
+#     hist_ticker = c1.text_input("Ticker filter", value="")
+#     hist_limit = c2.number_input("Limit", min_value=10, max_value=500, value=100, step=10)
 
-    if st.button("Load Signal History", type="primary", use_container_width=True):
-        params = {"limit": int(hist_limit)}
-        if hist_ticker.strip():
-            params["ticker"] = hist_ticker.strip().upper()
+#     if st.button("Load Signal History", type="primary", use_container_width=True):
+#         params = {"limit": int(hist_limit)}
+#         if hist_ticker.strip():
+#             params["ticker"] = hist_ticker.strip().upper()
 
-        with st.spinner("Loading signal history..."):
-            ok, resp = api_request(
-                "GET",
-                "/api/v1/signals/history",
-                params=params,
-                timeout=120,
-            )
+#         with st.spinner("Loading signal history..."):
+#             ok, resp = api_request(
+#                 "GET",
+#                 "/api/v1/signals/history",
+#                 params=params,
+#                 timeout=120,
+#             )
 
-        if ok:
-            data = extract_data(resp)
-            rows = data.get("results", []) if isinstance(data, dict) else []
+#         if ok:
+#             data = extract_data(resp)
+#             rows = data.get("results", []) if isinstance(data, dict) else []
 
-            if not rows:
-                st.warning("No saved signals found.")
-                st.json(resp)
-            else:
-                df = pd.DataFrame(rows)
+#             if not rows:
+#                 st.warning("No saved signals found.")
+#                 st.json(resp)
+#             else:
+#                 df = pd.DataFrame(rows)
 
-                st.success(f"Loaded {len(df)} signals")
+#                 st.success(f"Loaded {len(df)} signals")
 
-                preferred_cols = [
-                    "created_at", "ticker", "decision", "setup_type",
-                    "final_score", "entry", "stop", "target1", "target2",
-                    "risk_reward", "expected_return", "regime", "theme",
-                ]
+#                 preferred_cols = [
+#                     "created_at", "ticker", "decision", "setup_type",
+#                     "final_score", "entry", "stop", "target1", "target2",
+#                     "risk_reward", "expected_return", "regime", "theme",
+#                 ]
 
-                cols = [c for c in preferred_cols if c in df.columns]
+#                 cols = [c for c in preferred_cols if c in df.columns]
 
-                st.dataframe(
-                    df[cols] if cols else df,
-                    use_container_width=True,
-                    hide_index=True,
-                )
+#                 st.dataframe(
+#                     df[cols] if cols else df,
+#                     use_container_width=True,
+#                     hide_index=True,
+#                 )
 
-                st.download_button(
-                    "Download Signal History CSV",
-                    data=df.to_csv(index=False).encode("utf-8"),
-                    file_name="tdos_signal_history.csv",
-                    mime="text/csv",
-                )
-        else:
-            show_error(resp)
+#                 st.download_button(
+#                     "Download Signal History CSV",
+#                     data=df.to_csv(index=False).encode("utf-8"),
+#                     file_name="tdos_signal_history.csv",
+#                     mime="text/csv",
+#                 )
+#         else:
+#             show_error(resp)
