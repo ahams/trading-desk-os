@@ -23,7 +23,7 @@ import json
 import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
-
+import plotly.express as px
 import pandas as pd
 import requests
 import streamlit as st
@@ -209,7 +209,42 @@ def _safe_get(d, *keys, default=None):
         cur = cur.get(k)
     return cur if cur is not None else default
 
+SCANNER_REQUIRED_COLUMNS = [
+    "Ticker", "Decision", "Setup", "Final Score",
+    "Investment View", "Investment Score",
+    "Trading View", "Trading Score",
+    "Trade Expectancy %", "Expectancy R",
+    "Win Probability %", "Reward %", "Risk %",
+    "Scenario EV %", "Entry", "Stop", "Target 1",
+    "Target 2", "R/R", "Fundamental", "Technical",
+    "Liquidity", "Options", "Game Theory",
+    "Expectation", "Merton", "Greenfield ARR",
+    "Credit Risk", "Theme", "Thesis",
+]
 
+
+def ensure_scanner_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None:
+        df = pd.DataFrame()
+
+    for col in SCANNER_REQUIRED_COLUMNS:
+        if col not in df.columns:
+            df[col] = None
+
+    numeric_cols = [
+        "Final Score", "Investment Score", "Trading Score",
+        "Trade Expectancy %", "Expectancy R", "Win Probability %",
+        "Reward %", "Risk %", "Scenario EV %",
+        "Entry", "Stop", "Target 1", "Target 2", "R/R",
+        "Fundamental", "Technical", "Liquidity", "Options",
+        "Game Theory", "Expectation", "Merton", "Greenfield ARR",
+        "Distance To Default",
+    ]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    return df
 def to_scanner_df(resp):
     """
     Convert scanner/report API response into a clean dataframe.
@@ -281,7 +316,7 @@ def to_scanner_df(resp):
             "Thesis": r.get("final_thesis"),
         })
 
-    return pd.DataFrame(clean_rows)
+    return ensure_scanner_columns(pd.DataFrame(clean_rows))
 
 
 def render_scanner_tables(df: pd.DataFrame):
@@ -382,6 +417,9 @@ def render_scanner_tables(df: pd.DataFrame):
 
 def render_daily_report(results):
     df = to_scanner_df({"results": results})
+    if df.empty:
+        st.warning("No rows available.")
+        return
 
     if df.empty:
         st.warning("No daily report rows returned.")
@@ -436,7 +474,170 @@ def render_daily_report(results):
         file_name=f"tdos_daily_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv",
     )
+def render_metric_strip(df):
+    df = ensure_scanner_columns(df)
+    if df.empty:
+        st.warning("No rows available.")
+        return
+    c1, c2, c3, c4 = st.columns(4)
 
+    c1.metric("Strong Longs", df["Decision"].astype(str).str.contains("Strong Long", na=False).sum())
+    c2.metric("Tactical Longs", df["Decision"].astype(str).str.contains("Tactical Long", na=False).sum())
+    c3.metric("Watchlist", df["Decision"].astype(str).str.contains("Watchlist", na=False).sum())
+    avg_score = pd.to_numeric(df["Final Score"], errors="coerce").dropna().mean()
+    c4.metric("Avg Final Score", "n/a" if pd.isna(avg_score) else round(avg_score, 1))
+
+
+def render_opportunity_matrix(df):
+    df = ensure_scanner_columns(df)
+    if df.empty:
+        st.warning("No rows available.")
+        return
+    st.subheader("Investment vs Trading Matrix")
+
+    plot_df = df.dropna(subset=["Investment Score", "Trading Score"]).copy()
+
+    if "Trade Expectancy %" in plot_df.columns:
+        plot_df["Bubble Size"] = plot_df["Trade Expectancy %"].abs().fillna(1).clip(lower=1)
+    else:
+        plot_df["Bubble Size"] = 1
+
+    if plot_df.empty:
+        st.info("Not enough data for opportunity matrix.")
+        return
+
+    fig = px.scatter(
+        plot_df,
+        x="Trading Score",
+        y="Investment Score",
+        size="Bubble Size",
+        color="Decision",
+        hover_name="Ticker",
+        hover_data=[
+            "Setup",
+            "Final Score",
+            "Trade Expectancy %",
+            "Expectancy R",
+            "Theme",
+        ],
+        height=520,
+    )
+
+    fig.add_vline(x=60, line_dash="dash")
+    fig.add_hline(y=70, line_dash="dash")
+
+    fig.update_layout(
+        xaxis_title="Trading Quality",
+        yaxis_title="Investment Quality",
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.caption(
+        "Upper-right = strongest candidates. Upper-left = good businesses but wait for better entry. "
+        "Lower-right = tactical trades only. Lower-left = avoid/watchlist."
+    )
+
+
+def render_theme_heatmap(df):
+    df = ensure_scanner_columns(df)
+    if df.empty:
+        st.warning("No rows available.")
+        return
+    st.subheader("Theme Heatmap")
+
+    if "Theme" not in df.columns or df["Theme"].dropna().empty:
+        st.info("No theme data available.")
+        return
+
+    theme_df = (
+        df.groupby("Theme", dropna=False)
+        .agg(
+            Names=("Ticker", "count"),
+            AvgScore=("Final Score", "mean"),
+            AvgTradeExpectancy=("Trade Expectancy %", "mean"),
+            AvgInvestment=("Investment Score", "mean"),
+            AvgTrading=("Trading Score", "mean"),
+        )
+        .reset_index()
+        .sort_values("AvgScore", ascending=False)
+    )
+
+    fig = px.bar(
+        theme_df,
+        x="Theme",
+        y="AvgScore",
+        color="AvgTradeExpectancy",
+        hover_data=["Names", "AvgInvestment", "AvgTrading"],
+        height=420,
+    )
+
+    fig.update_layout(
+        xaxis_title="Theme",
+        yaxis_title="Average Final Score",
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.dataframe(theme_df, use_container_width=True, hide_index=True)
+
+
+def render_risk_radar(df):
+    df = ensure_scanner_columns(df)
+    if df.empty:
+        st.warning("No rows available.")
+        return
+    st.subheader("Risk Radar")
+
+    risk = df[
+        (df["Merton"].fillna(100) < 50)
+        | (df["Technical"].fillna(50) < 40)
+        | (df["Liquidity"].fillna(50) < 45)
+        | (df["Options"].fillna(50) < 35)
+    ].copy()
+
+    if risk.empty:
+        st.success("No major risk warnings detected.")
+        return
+
+    risk_cols = [
+        "Ticker", "Decision", "Setup", "Final Score",
+        "Technical", "Liquidity", "Options", "Merton",
+        "Credit Risk", "Thesis",
+    ]
+
+    st.dataframe(
+        risk[[c for c in risk_cols if c in risk.columns]],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def render_action_cards(df):
+    df = ensure_scanner_columns(df)
+    if df.empty:
+        st.warning("No rows available.")
+        return
+    st.subheader("Action Cards")
+
+    top = df.sort_values("Final Score", ascending=False).head(6)
+
+    for _, row in top.iterrows():
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([1, 1, 2])
+
+            c1.metric("Ticker", row.get("Ticker", "n/a"))
+            c2.metric("Decision", row.get("Decision", "n/a"))
+
+            c3.write(f"**Setup:** {row.get('Setup', 'n/a')}")
+            thesis = row.get("Thesis") or "No thesis available."
+            c3.write(f"**Action:** {str(thesis)[:350]}...")
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Final Score", row.get("Final Score", "n/a"))
+            m2.metric("Trade Exp.", row.get("Trade Expectancy %", "n/a"))
+            m3.metric("Inv. Score", row.get("Investment Score", "n/a"))
+            m4.metric("Trading Score", row.get("Trading Score", "n/a"))
 # =============================================================================
 # Renderers
 # =============================================================================
@@ -602,66 +803,6 @@ def render_analysis_card(data: Dict[str, Any]) -> None:
         st.json(data)
 
 
-def to_scanner_df(resp: Any) -> pd.DataFrame:
-    data = extract_data(resp)
-    rows: List[Dict[str, Any]] = []
-
-    if isinstance(data, dict):
-        if isinstance(data.get("results"), list):
-            rows = data["results"]
-        elif isinstance(data.get("data"), list):
-            rows = data["data"]
-        elif isinstance(data.get("longs"), list) or isinstance(data.get("shorts"), list):
-            rows = (data.get("longs") or []) + (data.get("shorts") or [])
-        elif isinstance(data.get("items"), list):
-            rows = data["items"]
-        elif isinstance(data.get("scanner"), list):
-            rows = data["scanner"]
-        elif all(isinstance(v, dict) for v in data.values()):
-            rows = list(data.values())
-    elif isinstance(data, list):
-        rows = data
-
-    flat_rows = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        r = dict(row)
-        if isinstance(r.get("data"), dict):
-            r = r["data"]
-
-        trade_plan = r.pop("trade_plan", {}) if isinstance(r.get("trade_plan"), dict) else {}
-        expected = r.pop("expected_return", {}) if isinstance(r.get("expected_return"), dict) else r.get("expected_return")
-        scores = r.pop("scores", {}) if isinstance(r.get("scores"), dict) else {}
-
-        for k in ["entry", "stop", "target1", "target2", "risk_reward", "position_size"]:
-            if k in trade_plan:
-                r[k] = trade_plan[k]
-        if isinstance(expected, dict):
-            r["ev_pct"] = f"{expected.get('ev_pct', 'n/a')}%"
-            r["expected_r"] = expected.get("expected_r")
-            r["probability_win"] = expected.get("probability_win")
-        elif expected is not None:
-            r["expected_return"] = expected
-
-        for k, v in scores.items():
-            r[f"score_{k}"] = v
-        flat_rows.append(r)
-
-    if not flat_rows:
-        return pd.DataFrame()
-
-    df = pd.DataFrame(flat_rows)
-    preferred = [
-        "ticker", "decision", "final_score", "setup_type", "ev_pct", "expected_r", "probability_win",
-        "entry", "stop", "target1", "target2", "risk_reward", "position_size", "regime", "theme",
-        "score_fundamental", "score_technical", "score_trend_quality", "score_entry_quality", "score_leadership",
-        "score_liquidity", "score_options", "score_game_theory", "score_game", "score_catalyst",
-        "score_expectation", "score_merton", "score_neocloud",
-    ]
-    cols = [c for c in preferred if c in df.columns] + [c for c in df.columns if c not in preferred]
-    return df[cols]
-
 
 # =============================================================================
 # Sidebar
@@ -815,7 +956,18 @@ with scanner_tab:
 
             if ok:
                 df = to_scanner_df(resp)
-                render_scanner_tables(df)
+                if df.empty:
+                    st.warning("Scanner returned no rows.")
+                    st.json(resp)
+                else:
+                    render_metric_strip(df)
+                    render_opportunity_matrix(df)
+                    render_theme_heatmap(df)
+                    render_action_cards(df)
+                    render_risk_radar(df)
+
+                    with st.expander("Full Desk Blotter"):
+                        render_scanner_tables(df)
             else:
                 show_error(resp)
 
@@ -879,7 +1031,16 @@ with report_tab:
                     )
 
                 if results:
-                    render_daily_report(results)
+                    df_report = to_scanner_df({"results": results})
+
+                    render_metric_strip(df_report)
+                    render_opportunity_matrix(df_report)
+                    render_theme_heatmap(df_report)
+                    render_risk_radar(df_report)
+                    render_action_cards(df_report)
+
+                    with st.expander("Full Daily Report Table"):
+                        render_scanner_tables(df_report)
                 else:
                     st.warning("Daily report returned no result rows.")
                     st.json(resp)
