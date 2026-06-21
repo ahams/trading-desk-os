@@ -802,7 +802,43 @@ def render_analysis_card(data: Dict[str, Any]) -> None:
     with st.expander("Raw response"):
         st.json(data)
 
+def render_clean_daily_report(data: dict):
+    st.subheader("Executive Summary")
+    st.info(data.get("executive_summary", "No summary returned."))
 
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Report ID", data.get("report_id", "n/a"))
+    c2.metric("Date", data.get("report_date", "n/a"))
+    c3.metric("Scanner Count", data.get("scanner_count", "n/a"))
+    c4.metric("Signals Saved", len(data.get("signal_ids") or []))
+
+    telegram_text = data.get("telegram_text")
+    markdown_text = data.get("markdown_text")
+    paths = data.get("paths") or {}
+
+    if telegram_text:
+        st.subheader("Telegram Brief")
+        st.code(telegram_text, language="text")
+
+    if markdown_text:
+        with st.expander("Full Markdown Report"):
+            st.markdown(markdown_text)
+
+        st.download_button(
+            "Download Markdown Report",
+            data=markdown_text.encode("utf-8"),
+            file_name=f"{data.get('report_id', 'tdos_daily_report')}.md",
+            mime="text/markdown",
+        )
+
+    if paths:
+        with st.expander("Generated Report Files"):
+            st.json(paths)
+
+    signal_ids = data.get("signal_ids") or []
+    if signal_ids:
+        with st.expander("Saved Signal IDs"):
+            st.write(signal_ids)
 
 # =============================================================================
 # Sidebar
@@ -976,6 +1012,76 @@ with scanner_tab:
 # Daily Report
 # =============================================================================
 
+# with report_tab:
+#     st.header("Daily Report")
+
+#     c1, c2 = st.columns([3, 1])
+
+#     report_tickers_text = c1.text_area(
+#         "Report tickers",
+#         value="NVDA, AMD, AVGO, ANET, MRVL, MU, GOOGL, AMZN, AAPL, MSFT",
+#         height=100,
+#     )
+
+#     report_max_names = c2.number_input(
+#         "Max report names",
+#         min_value=1,
+#         max_value=100,
+#         value=20,
+#         step=1,
+#     )
+
+#     report_tickers = [
+#         t.strip().upper()
+#         for t in report_tickers_text.replace("\n", ",").split(",")
+#         if t.strip()
+#     ]
+
+#     if st.button("Generate Daily Report", type="primary", use_container_width=True):
+#         if not report_tickers:
+#             st.warning("Enter at least one ticker.")
+#         else:
+#             payload = {
+#                 "tickers": report_tickers[: int(report_max_names)],
+#                 "max_names": int(report_max_names),
+#                 "compact": True,
+#             }
+
+#             with st.spinner(f"Generating report for {len(payload['tickers'])} tickers..."):
+#                 ok, resp = api_request(
+#                     "POST",
+#                     "/api/v1/report/daily",
+#                     payload=payload,
+#                     timeout=300,
+#                 )
+
+#             if ok:
+#                 data = extract_data(resp)
+
+#                 results = []
+#                 if isinstance(data, dict):
+#                     results = (
+#                         data.get("results")
+#                         or data.get("scanner_results")
+#                         or data.get("data", {}).get("results", [])
+#                     )
+
+#                 if results:
+#                     df_report = to_scanner_df({"results": results})
+
+#                     render_metric_strip(df_report)
+#                     render_opportunity_matrix(df_report)
+#                     render_theme_heatmap(df_report)
+#                     render_risk_radar(df_report)
+#                     render_action_cards(df_report)
+
+#                     with st.expander("Full Daily Report Table"):
+#                         render_scanner_tables(df_report)
+#                 else:
+#                     st.warning("Daily report returned no result rows.")
+#                     st.json(resp)
+#             else:
+#                 show_error(resp)
 with report_tab:
     st.header("Daily Report")
 
@@ -995,74 +1101,87 @@ with report_tab:
         step=1,
     )
 
-    report_tickers = [
-        t.strip().upper()
-        for t in report_tickers_text.replace("\n", ",").split(",")
-        if t.strip()
-    ]
+    report_tickers = parse_tickers(report_tickers_text)
 
     if st.button("Generate Daily Report", type="primary", use_container_width=True):
-        if not report_tickers:
-            st.warning("Enter at least one ticker.")
-        else:
-            payload = {
-                "tickers": report_tickers[: int(report_max_names)],
-                "max_names": int(report_max_names),
-                "compact": True,
-            }
+        payload = {
+            "tickers": report_tickers[: int(report_max_names)],
+            "max_names": int(report_max_names),
+            "compact": True,
+        }
 
-            with st.spinner(f"Generating report for {len(payload['tickers'])} tickers..."):
-                ok, resp = api_request(
-                    "POST",
-                    "/api/v1/report/daily",
-                    payload=payload,
-                    timeout=300,
-                )
+        with st.spinner("Generating daily report..."):
+            ok, resp = api_request(
+                "POST",
+                "/api/v1/report/daily",
+                payload=payload,
+                timeout=300,
+            )
 
-            if ok:
-                data = extract_data(resp)
-
-                results = []
-                if isinstance(data, dict):
-                    results = (
-                        data.get("results")
-                        or data.get("scanner_results")
-                        or data.get("data", {}).get("results", [])
-                    )
-
-                if results:
-                    df_report = to_scanner_df({"results": results})
-
-                    render_metric_strip(df_report)
-                    render_opportunity_matrix(df_report)
-                    render_theme_heatmap(df_report)
-                    render_risk_radar(df_report)
-                    render_action_cards(df_report)
-
-                    with st.expander("Full Daily Report Table"):
-                        render_scanner_tables(df_report)
-                else:
-                    st.warning("Daily report returned no result rows.")
-                    st.json(resp)
+        if ok:
+            data = extract_data(resp)
+            if isinstance(data, dict):
+                render_clean_daily_report(data)
             else:
-                show_error(resp)
-
+                st.warning("Unexpected report response.")
+                st.json(resp)
+        else:
+            show_error(resp)
 # =============================================================================
 # Signal History Placeholder
 # =============================================================================
 
 with history_tab:
     st.header("Signal History")
-    st.info("This tab is ready for the next backend endpoint: GET /api/v1/signals/history")
-    st.markdown(
-        """
-        Suggested next beta endpoint:
 
-        ```http
-        GET /api/v1/signals/history?ticker=NVDA&limit=100
-        ```
+    c1, c2 = st.columns([2, 1])
+    hist_ticker = c1.text_input("Ticker filter", value="")
+    hist_limit = c2.number_input("Limit", min_value=10, max_value=500, value=100, step=10)
 
-        It should return saved forward-test signals with status, 5d/10d/20d returns,
-        target hit, stop hit, and max favorable/adverse excursion.
-        """
-    )
+    if st.button("Load Signal History", type="primary", use_container_width=True):
+        params = {"limit": int(hist_limit)}
+        if hist_ticker.strip():
+            params["ticker"] = hist_ticker.strip().upper()
+
+        with st.spinner("Loading signal history..."):
+            ok, resp = api_request(
+                "GET",
+                "/api/v1/signals/history",
+                params=params,
+                timeout=120,
+            )
+
+        if ok:
+            data = extract_data(resp)
+            rows = data.get("results", []) if isinstance(data, dict) else []
+
+            if not rows:
+                st.warning("No saved signals found.")
+                st.json(resp)
+            else:
+                df = pd.DataFrame(rows)
+
+                st.success(f"Loaded {len(df)} signals")
+
+                preferred_cols = [
+                    "created_at", "ticker", "decision", "setup_type",
+                    "final_score", "entry", "stop", "target1", "target2",
+                    "risk_reward", "expected_return", "regime", "theme",
+                ]
+
+                cols = [c for c in preferred_cols if c in df.columns]
+
+                st.dataframe(
+                    df[cols] if cols else df,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                st.download_button(
+                    "Download Signal History CSV",
+                    data=df.to_csv(index=False).encode("utf-8"),
+                    file_name="tdos_signal_history.csv",
+                    mime="text/csv",
+                )
+        else:
+            show_error(resp)
