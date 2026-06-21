@@ -193,7 +193,249 @@ def safe_metric_value(x: Any, decimals: int = 1) -> str:
         return f"{float(x):,.{decimals}f}"
     except Exception:
         return str(x)
+#====================================
+#Additional hepers
+#====================================
 
+import pandas as pd
+from datetime import datetime
+
+
+def _safe_get(d, *keys, default=None):
+    cur = d
+    for k in keys:
+        if not isinstance(cur, dict):
+            return default
+        cur = cur.get(k)
+    return cur if cur is not None else default
+
+
+def to_scanner_df(resp):
+    """
+    Convert scanner/report API response into a clean dataframe.
+    Handles:
+      resp["data"]["results"]
+      resp["data"]["data"]["results"]
+      resp["results"]
+      {"results": [...]}
+    """
+    data = extract_data(resp)
+
+    rows = []
+
+    if isinstance(data, dict):
+        rows = (
+            data.get("results")
+            or data.get("scanner_results")
+            or (data.get("data") or {}).get("results")
+            or []
+        )
+    elif isinstance(data, list):
+        rows = data
+
+    clean_rows = []
+
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+
+        trade = r.get("trade_expectancy") or r.get("expected_return") or {}
+        decision_layer = r.get("decision_layer") or {}
+        scores = r.get("scores") or {}
+        plan = r.get("trade_plan") or {}
+        cap = r.get("capital_structure_snapshot") or {}
+
+        clean_rows.append({
+            "Ticker": r.get("ticker"),
+            "Decision": r.get("decision"),
+            "Setup": r.get("setup_type"),
+            "Final Score": r.get("final_score"),
+            "Investment View": decision_layer.get("investment_view"),
+            "Investment Score": decision_layer.get("investment_score"),
+            "Trading View": decision_layer.get("trading_view"),
+            "Trading Score": decision_layer.get("trading_score"),
+            "Trade Expectancy %": trade.get("trade_expectancy_pct"),
+            "Expectancy R": trade.get("trade_expectancy_r"),
+            "Win Probability %": trade.get("probability_win"),
+            "Reward %": trade.get("reward_pct"),
+            "Risk %": trade.get("risk_pct"),
+            "Scenario EV %": trade.get("legacy_scenario_ev_pct"),
+            "Entry": plan.get("entry"),
+            "Stop": plan.get("stop"),
+            "Target 1": plan.get("target1"),
+            "Target 2": plan.get("target2"),
+            "R/R": plan.get("risk_reward"),
+            "Position Size": plan.get("position_size"),
+            "Fundamental": scores.get("fundamental"),
+            "Technical": scores.get("technical"),
+            "Liquidity": scores.get("liquidity"),
+            "Options": scores.get("options"),
+            "Game Theory": scores.get("game_theory"),
+            "Expectation": scores.get("expectation"),
+            "Merton": scores.get("merton_credit"),
+            "Greenfield ARR": scores.get("greenfield_arr_valuation"),
+            "Credit Risk": cap.get("risk"),
+            "Distance To Default": cap.get("distance_to_default"),
+            "Regime": r.get("regime"),
+            "Theme": r.get("theme"),
+            "Thesis": r.get("final_thesis"),
+        })
+
+    return pd.DataFrame(clean_rows)
+
+
+def render_scanner_tables(df: pd.DataFrame):
+    if df is None or df.empty:
+        st.warning("No scanner rows returned.")
+        return
+
+    required = ["Ticker", "Decision", "Final Score"]
+    missing = [c for c in required if c not in df.columns]
+
+    if missing:
+        st.error(f"Scanner dataframe missing columns: {missing}")
+        st.write("Available columns:", list(df.columns))
+        st.dataframe(df, use_container_width=True)
+        return
+
+    st.success(f"Loaded {len(df)} rows")
+
+    blotter_cols = [
+        "Ticker", "Decision", "Setup", "Final Score",
+        "Investment View", "Trading View",
+        "Trade Expectancy %", "Expectancy R",
+        "Win Probability %", "Entry", "Stop", "Target 2", "R/R", "Theme"
+    ]
+
+    st.subheader("Desk Blotter")
+    st.dataframe(
+        df[[c for c in blotter_cols if c in df.columns]],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.subheader("Best Current Trades")
+    best = df[
+        df["Decision"].astype(str).str.contains("Strong Long|Tactical Long", na=False)
+    ].sort_values("Trade Expectancy %", ascending=False)
+
+    st.dataframe(
+        best[[c for c in blotter_cols if c in best.columns]],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.subheader("Investment / Trading Conflicts")
+    conflict = df[
+        df["Investment View"].astype(str).isin(["Bullish", "Constructive"])
+        & df["Trading View"].astype(str).str.contains("Neutral|Wait", na=False)
+    ]
+
+    st.dataframe(
+        conflict[[c for c in blotter_cols if c in conflict.columns]],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.subheader("Risk Warnings")
+    risk = df[
+        (df["Merton"].fillna(100) < 50)
+        | (df["Technical"].fillna(50) < 40)
+        | (df["Liquidity"].fillna(50) < 45)
+        | (df["Options"].fillna(50) < 35)
+    ]
+
+    risk_cols = [
+        "Ticker", "Decision", "Setup", "Final Score",
+        "Technical", "Liquidity", "Options", "Merton",
+        "Credit Risk", "Thesis"
+    ]
+
+    st.dataframe(
+        risk[[c for c in risk_cols if c in risk.columns]],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    with st.expander("Engine Scores"):
+        score_cols = [
+            "Ticker", "Fundamental", "Technical", "Liquidity",
+            "Options", "Game Theory", "Expectation", "Merton", "Greenfield ARR"
+        ]
+        st.dataframe(
+            df[[c for c in score_cols if c in df.columns]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    with st.expander("Full Scanner Export"):
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download Scanner CSV",
+        data=csv,
+        file_name=f"tdos_scanner_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+    )
+
+
+def render_daily_report(results):
+    df = to_scanner_df({"results": results})
+
+    if df.empty:
+        st.warning("No daily report rows returned.")
+        return
+
+    st.subheader("Executive Summary")
+
+    strong = df[df["Decision"].astype(str).str.contains("Strong Long", na=False)]
+    tactical = df[df["Decision"].astype(str).str.contains("Tactical Long", na=False)]
+    watch = df[df["Decision"].astype(str).str.contains("Watchlist", na=False)]
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Strong Longs", len(strong))
+    c2.metric("Tactical Longs", len(tactical))
+    c3.metric("Watchlist", len(watch))
+    c4.metric("Avg Score", round(df["Final Score"].dropna().mean(), 1) if "Final Score" in df else "n/a")
+
+    st.subheader("Top Ranked Names")
+    st.dataframe(
+        df.sort_values("Final Score", ascending=False).head(15),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.subheader("Best Trade Expectancy")
+    st.dataframe(
+        df.sort_values("Trade Expectancy %", ascending=False).head(10),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.subheader("Bullish Investment / Neutral Trading")
+    conflict = df[
+        df["Investment View"].astype(str).isin(["Bullish", "Constructive"])
+        & df["Trading View"].astype(str).str.contains("Neutral|Wait", na=False)
+    ]
+    st.dataframe(conflict, use_container_width=True, hide_index=True)
+
+    st.subheader("Risk Warnings")
+    risk = df[
+        (df["Merton"].fillna(100) < 50)
+        | (df["Technical"].fillna(50) < 40)
+        | (df["Liquidity"].fillna(50) < 45)
+        | (df["Options"].fillna(50) < 35)
+    ]
+    st.dataframe(risk, use_container_width=True, hide_index=True)
+
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download Daily Report CSV",
+        data=csv,
+        file_name=f"tdos_daily_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+    )
 
 # =============================================================================
 # Renderers
@@ -521,64 +763,59 @@ with analyze_tab:
 # =============================================================================
 
 with scanner_tab:
-    st.header("Scanner")
-    default_watchlist = "NVDA,AAPL,MSFT,AMZN,META,GOOGL,TSLA,AMD,AVGO,PLTR,MRVL,ANET,CRWV,NBIS,IREN"
-    watchlist_text = st.text_area("Tickers", value=default_watchlist, height=90)
-    uploaded = st.file_uploader("Optional CSV watchlist", type=["csv"])
-    include_options = st.checkbox("Include options", value=True, key="scanner_include_options")
+    st.header("Stock Scanner")
 
-    tickers: List[str] = []
-    if uploaded is not None:
-        try:
-            df_upload = pd.read_csv(uploaded)
-            first_col = df_upload.columns[0]
-            tickers = df_upload[first_col].dropna().astype(str).str.upper().str.strip().tolist()
-        except Exception as exc:
-            st.error(f"Could not read CSV: {exc}")
-    else:
-        tickers = parse_tickers(watchlist_text)
+    c1, c2, c3 = st.columns([3, 1, 1])
 
-    max_tickers = st.slider("Max tickers this run", 1, 100, min(20, max(1, len(tickers))))
-    tickers = tickers[:max_tickers]
+    universe_text = c1.text_area(
+        "Tickers",
+        value="NVDA, AMD, AVGO, ANET, MRVL, MU, GOOGL, AMZN, AAPL, MSFT",
+        height=100,
+        help="Comma-separated tickers."
+    )
+
+    max_names = c2.number_input(
+        "Max names",
+        min_value=1,
+        max_value=100,
+        value=20,
+        step=1,
+    )
+
+    include_options = c3.checkbox(
+        "Include options",
+        value=False,
+        help="Options chains slow down bulk scans. Keep off for large scans."
+    )
+
+    tickers = [
+        t.strip().upper()
+        for t in universe_text.replace("\n", ",").split(",")
+        if t.strip()
+    ]
 
     if st.button("Run Scanner", type="primary", use_container_width=True):
         if not tickers:
-            st.warning("Add at least one ticker")
+            st.warning("Enter at least one ticker.")
         else:
             payload = {
-                "tickers": tickers,
-                "max_names": len(tickers),
-                "include_options": include_options,
+                "tickers": tickers[: int(max_names)],
+                "max_names": int(max_names),
+                "include_options": bool(include_options),
+                "compact": True,
             }
-            with st.spinner(f"Scanning {len(tickers)} tickers..."):
-                ok, resp = api_request("POST", "/api/v1/scanner/compact", payload=payload, timeout=600)
 
-                # Backward-compatible fallback for older backend builds.
-                if not ok and isinstance(resp, dict) and resp.get("status_code") == 405:
-                    ok, resp = api_request(
-                        "GET",
-                        "/api/v1/scanner/compact",
-                        params={"tickers": ",".join(tickers)},
-                        timeout=600,
-                    )
+            with st.spinner(f"Scanning {len(payload['tickers'])} tickers..."):
+                ok, resp = api_request(
+                    "POST",
+                    "/api/v1/scanner/compact",
+                    payload=payload,
+                    timeout=300,
+                )
 
             if ok:
                 df = to_scanner_df(resp)
-                if df.empty:
-                    st.warning("Scanner returned no rows. Raw response below.")
-                    st.json(resp)
-                else:
-                    st.success(f"Loaded {len(df)} scanner rows")
-                    st.dataframe(df, use_container_width=True, hide_index=True)
-                    csv = df.to_csv(index=False).encode("utf-8")
-                    st.download_button(
-                        "Download Scanner CSV",
-                        data=csv,
-                        file_name=f"tdos_scanner_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv",
-                    )
-                    with st.expander("Raw response"):
-                        st.json(resp)
+                render_scanner_tables(df)
             else:
                 show_error(resp)
 
@@ -589,82 +826,65 @@ with scanner_tab:
 
 with report_tab:
     st.header("Daily Report")
-    report_tickers_text = st.text_area(
+
+    c1, c2 = st.columns([3, 1])
+
+    report_tickers_text = c1.text_area(
         "Report tickers",
-        value="NVDA,AAPL,MSFT,AMZN,META,GOOGL,TSLA,AMD,AVGO,PLTR,MRVL,ANET",
-        height=90,
+        value="NVDA, AMD, AVGO, ANET, MRVL, MU, GOOGL, AMZN, AAPL, MSFT",
+        height=100,
     )
-    report_title = st.text_input("Report title", value="Trading Desk OS Daily Report")
-    report_max_names = st.slider("Max report names", 1, 100, 20)
-    include_signal_records = st.checkbox("Record report signals", value=True)
+
+    report_max_names = c2.number_input(
+        "Max report names",
+        min_value=1,
+        max_value=100,
+        value=20,
+        step=1,
+    )
+
+    report_tickers = [
+        t.strip().upper()
+        for t in report_tickers_text.replace("\n", ",").split(",")
+        if t.strip()
+    ]
 
     if st.button("Generate Daily Report", type="primary", use_container_width=True):
-        report_tickers = parse_tickers(report_tickers_text)[:report_max_names]
         if not report_tickers:
-            st.warning("Add at least one report ticker")
+            st.warning("Enter at least one ticker.")
         else:
             payload = {
-                "tickers": report_tickers,
-                "title": report_title,
-                "max_names": report_max_names,
-                "include_signal_records": include_signal_records,
+                "tickers": report_tickers[: int(report_max_names)],
+                "max_names": int(report_max_names),
+                "compact": True,
             }
-            with st.spinner("Generating report..."):
-                ok, resp = api_request("POST", "/api/v1/report/daily", payload=payload, timeout=900)
 
-                # Backward-compatible fallback for older backend builds.
-                if not ok and isinstance(resp, dict) and resp.get("status_code") == 405:
-                    ok, resp = api_request(
-                        "GET",
-                        "/api/v1/report/daily",
-                        params={"tickers": ",".join(report_tickers)},
-                        timeout=900,
-                    )
+            with st.spinner(f"Generating report for {len(payload['tickers'])} tickers..."):
+                ok, resp = api_request(
+                    "POST",
+                    "/api/v1/report/daily",
+                    payload=payload,
+                    timeout=300,
+                )
 
             if ok:
                 data = extract_data(resp)
-                st.success("Report generated")
+
+                results = []
                 if isinstance(data, dict):
-                    html = data.get("html_text") or data.get("html") or data.get("html_report")
-                    markdown = data.get("markdown_text") or data.get("markdown") or data.get("email") or data.get("text")
-                    telegram = data.get("telegram_text") or data.get("telegram")
-                    executive_summary = data.get("executive_summary")
+                    results = (
+                        data.get("results")
+                        or data.get("scanner_results")
+                        or data.get("data", {}).get("results", [])
+                    )
 
-                    if executive_summary:
-                        st.subheader("Executive Summary")
-                        st.write(executive_summary)
-
-                    if markdown:
-                        st.subheader("Markdown / Email")
-                        st.markdown(markdown)
-                        st.download_button(
-                            "Download Markdown",
-                            markdown,
-                            file_name="tdos_daily_report.md",
-                            mime="text/markdown",
-                        )
-
-                    if html:
-                        st.subheader("HTML Preview")
-                        st.components.v1.html(html, height=700, scrolling=True)
-                        st.download_button(
-                            "Download HTML",
-                            html,
-                            file_name="tdos_daily_report.html",
-                            mime="text/html",
-                        )
-
-                    if telegram:
-                        st.subheader("Telegram Text")
-                        st.code(telegram, language="text")
+                if results:
+                    render_daily_report(results)
                 else:
-                    st.write(data)
-
-                with st.expander("Raw response"):
+                    st.warning("Daily report returned no result rows.")
                     st.json(resp)
             else:
                 show_error(resp)
-
 
 # =============================================================================
 # Signal History Placeholder
