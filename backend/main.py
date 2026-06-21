@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend.routes import account, admin, analyze, regime, report, scanner
+from backend.routes import account, admin, analyze, regime, report, scanner,signals
 from config.settings import settings
 from database.store import init_db, record_request
 
@@ -80,3 +80,5 @@ app.include_router(analyze.router)
 app.include_router(scanner.router)
 app.include_router(report.router)
 app.include_router(regime.router)
+app.include_router(signals.router)
+
