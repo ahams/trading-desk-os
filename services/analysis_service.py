@@ -27,26 +27,27 @@ from theme_engine import analyze_theme, rank_themes
 from utils import clamp
 from config.settings import settings
 from database.store import connect, init_db, utc_now
+from engines.trend_quality_engine import analyze_trend_quality
+from engines.entry_quality_engine import analyze_entry_quality
+from engines.leadership_engine import analyze_leadership
+
 try:
-    from engines.trend_quality_engine import analyze_trend_quality
-    from engines.entry_quality_engine import analyze_entry_quality
-    from engines.leadership_engine import analyze_leadership
+    from engines.optionality_engine import optionality_score
 except Exception:
-    from engines.trend_quality_engine import analyze_trend_quality
-    from engines.entry_quality_engine import analyze_entry_quality
-    from engines.leadership_engine import analyze_leadership
+    optionality_score = None    
 logger = logging.getLogger("trading_desk.api.analysis")
 
 DEFAULT_WEIGHTS = {
-    "fundamental": 0.14,
-    "technical": 0.20,
-    "liquidity": 0.12,
-    "options": 0.12,
-    "game": 0.13,
-    "catalyst": 0.07,
+    "fundamental": 0.13,
+    "technical": 0.18,
+    "liquidity": 0.11,
+    "options": 0.11,
+    "game": 0.12,
+    "catalyst": 0.06,
     "expectation": 0.10,
     "merton": 0.07,
     "neocloud": 0.05,
+    "optionality": 0.07,
 }
 
 MARKET_SYMBOLS = ["SPY", "QQQ", "IWM", "DIA", "TLT", "HYG", "LQD", "UUP", "^VIX", "^TNX"]
@@ -120,6 +121,17 @@ def analyze_stock(
     info = get_info(ticker) or {}
     news = get_news(ticker) or []
 
+    # Safe defaults so downstream scoring never sees unbound optionality variables.
+    optionality_total = 50.0
+    optionality_meta = {
+        "score": 50.0,
+        "signal": "Not calculated",
+        "summary": "Optionality analysis has not been calculated.",
+        "metrics": {},
+        "bull_points": [],
+        "bear_points": [],
+    }
+
     f_score, f_meta = fundamental_score(info)
     t_score, t_meta, xdf = technical_score(df, spy_df)
     l_res = analyze_liquidity(df, info)
@@ -187,7 +199,43 @@ def analyze_stock(
     except Exception as exc:
         logger.warning("theme score failed %s: %s", ticker, exc)
         theme_meta = {"total": 50, "summary": "Theme unavailable", "metrics": {}}
-        # ============================================================
+
+    # ============================================================
+    # Optionality Engine: market-implied future option value
+    # ============================================================
+    try:
+        if optionality_score is not None:
+            optionality_total, optionality_meta = optionality_score(
+                info=info,
+                df=df,
+                fund_meta=f_meta,
+                expectation_meta=e_meta,
+                greenfield_meta=neocloud_meta,
+            )
+            optionality_total = float(optionality_total)
+        else:
+            optionality_total = 50.0
+            optionality_meta = {
+                "score": 50.0,
+                "signal": "Optionality engine unavailable",
+                "summary": "Optionality analysis unavailable.",
+                "metrics": {},
+                "bull_points": [],
+                "bear_points": [],
+            }
+    except Exception as exc:
+        logger.warning("optionality score failed %s: %s", ticker, exc)
+        optionality_total = 50.0
+        optionality_meta = {
+            "score": 50.0,
+            "signal": "Optionality engine failed",
+            "summary": f"Optionality analysis failed: {exc}",
+            "metrics": {},
+            "bull_points": [],
+            "bear_points": [str(exc)],
+        }
+
+        
     # Technical v2: Trend + Entry + Leadership
     # ============================================================
 
@@ -272,6 +320,7 @@ def analyze_stock(
         "expectation": float(e_score),
         "merton": float(merton_score),
         "neocloud": float(neocloud_score),
+        "optionality": float(optionality_total),
     }
     final_score = combine_scores(scores, DEFAULT_WEIGHTS)
     decision = classify(final_score, t_meta.get("setup_type", ""))
@@ -304,8 +353,18 @@ def analyze_stock(
             "expectation": e_score,
             "merton": merton_score,
             "neocloud": neocloud_score,
+            "optionality": optionality_total,
         },
-        metas={"technical": t_meta, "liquidity": l_meta, "options": o_meta, "game": g_meta, "theme": theme_meta, "expectation": e_meta, "merton": merton_meta, "neocloud": neocloud_meta},
+        metas={"technical": t_meta,
+               "liquidity": l_meta,
+               "options": o_meta, 
+               "game": g_meta, 
+               "theme": theme_meta,
+               "expectation": e_meta,
+               "merton": merton_meta, 
+               "neocloud": neocloud_meta,
+               "optionality": optionality_meta,
+               },
         regime_result=regime_result,
         account_size=account_size,
         risk_per_trade=risk_pct,
@@ -324,6 +383,7 @@ def analyze_stock(
     thesis += f" Merton credit: {merton_meta.get('signal', 'n/a')} — {merton_meta.get('summary', 'n/a')}"
     if is_neocloud_ticker(ticker, info):
         thesis += f" NeoCloud valuation: {neocloud_meta.get('signal', 'n/a')} — {neocloud_meta.get('summary', 'n/a')}"
+    thesis += f" Optionality: {optionality_meta.get('signal', 'n/a')} — {optionality_meta.get('summary', 'n/a')}"
     # row = result_row(ticker, final_score, decision, t_meta.get("setup_type", ""), levels, thesis)
     row = result_row(ticker, final_score, decision, setup_type, levels, thesis)
 
@@ -357,6 +417,7 @@ def analyze_stock(
             "merton": merton_meta.get("summary"),
             "neocloud": neocloud_meta.get("summary"),
             "expected_return": er.get("summary"),
+            "optionality": optionality_meta.get("summary"),
         },
         "metas": {
             "fundamental": f_meta,
@@ -372,6 +433,7 @@ def analyze_stock(
             "trend_quality": trend_meta,
             "entry_quality": entry_meta,
             "leadership": leadership_meta,
+            "optionality": optionality_meta,
         },
     }
     safe = _json_safe(result)
