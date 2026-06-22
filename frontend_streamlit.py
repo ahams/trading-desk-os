@@ -758,9 +758,32 @@ def render_analysis_card(data: Dict[str, Any]) -> None:
                 st.caption(neo.get("signal", "n/a"))
                 st.write("EV / Current ARR:", neo.get("ev_current_arr", "n/a"))
                 st.write("EV / Target ARR:", neo.get("ev_target_arr", "n/a"))
+    
+    
+    opt = data.get("optionality_snapshot") or {}
 
-    st.markdown("### Desk Thesis")
-    st.write(data.get("final_thesis", "n/a"))
+    if opt:
+        st.markdown("### Embedded Optionality")
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Optionality Score", opt.get("score", "n/a"))
+        c2.metric("Existing Business Value %", opt.get("existing_value_pct", "n/a"))
+        c3.metric("Embedded Future Option %", opt.get("embedded_optionality_pct", "n/a"))
+
+        st.caption(opt.get("signal", ""))
+
+        if opt.get("summary"):
+            st.info(opt.get("summary"))
+
+        bears = opt.get("bear_points") or []
+        bulls = opt.get("bull_points") or []
+
+        if bulls:
+            st.success(" | ".join(bulls))
+        if bears:
+            st.warning(" | ".join(bears))
+        st.markdown("### Desk Thesis")
+        st.write(data.get("final_thesis", "n/a"))
 
     why_not = data.get("why_not_long_now") or []
     if why_not:
