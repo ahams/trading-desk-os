@@ -809,6 +809,56 @@ def render_analysis_card(data: Dict[str, Any]) -> None:
         else:
             st.error(str(bear))
 
+#new approach to use narratives instead of scores
+    narr = data.get("narrative") or {}
+
+    if narr:
+        st.markdown("### Investment Narrative")
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Investment Quality", narr.get("business_quality", {}).get("rating", "n/a"))
+        c2.metric("Market Expectations", narr.get("market_expectations", {}).get("rating", "n/a"))
+        c3.metric("Trading Conditions", narr.get("trading_conditions", {}).get("rating", "n/a"))
+
+        with st.container(border=True):
+            st.markdown("#### Business Quality")
+            for p in narr.get("business_quality", {}).get("points", []):
+                st.write(f"• {p}")
+
+        with st.container(border=True):
+            st.markdown("#### Market Expectations")
+            for p in narr.get("market_expectations", {}).get("points", []):
+                st.write(f"• {p}")
+
+        with st.container(border=True):
+            st.markdown("#### Trading Conditions")
+            for p in narr.get("trading_conditions", {}).get("points", []):
+                st.write(f"• {p}")
+
+        c1, c2 = st.columns(2)
+
+        with c1:
+            st.markdown("#### Primary Risks")
+            for p in narr.get("primary_risks", []):
+                st.warning(p)
+
+        with c2:
+            st.markdown("#### Opportunity")
+            for p in narr.get("opportunity", []):
+                st.success(p)
+
+        rec = narr.get("recommendation") or {}
+        st.markdown("#### Recommendation")
+        st.info(rec.get("summary", "n/a"))
+        st.success(rec.get("action", "n/a"))
+    else:
+        st.markdown("### Desk Thesis")
+        st.write(data.get("final_thesis", "n/a"))
+    
+    
+    
+    
+    
     if reads:
         with st.expander("Key Reads", expanded=False):
             for k, v in reads.items():

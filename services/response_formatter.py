@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from engines.narrative_engine import build_investment_narrative
 from typing import Any, Dict, List, Optional
 
 
@@ -556,6 +556,8 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
     compact["setup_type"] = verdict["setup_type"]
     compact["final_thesis"] = verdict["final_thesis"]  
     compact["decision_layer"] = decision_layer 
+    compact["narrative"] = build_investment_narrative(compact)
+    compact["final_thesis"] = compact["narrative"]["executive_summary"]
     return compact
 
 
