@@ -33,8 +33,9 @@ from engines.leadership_engine import analyze_leadership
 
 try:
     from engines.optionality_engine import optionality_score
-except Exception:
-    optionality_score = None    
+except Exception as e:
+    print(f"[IMPORT ERROR] optionality_engine failed: {type(e).__name__}: {e}")
+    optionality_score = None   
 logger = logging.getLogger("trading_desk.api.analysis")
 
 DEFAULT_WEIGHTS = {

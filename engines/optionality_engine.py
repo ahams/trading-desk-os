@@ -5,7 +5,14 @@ import math
 import numpy as np
 import pandas as pd
 
-from utils import clamp
+try:
+    from utils import clamp
+except Exception:
+    def clamp(x, lo=0, hi=100):
+        try:
+            return max(lo, min(hi, float(x)))
+        except Exception:
+            return 50.0
 
 
 def _f(x: Any, default: float = np.nan) -> float:
