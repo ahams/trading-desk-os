@@ -529,13 +529,41 @@ def _synthesize(
     score = clamp(score)
 
     reasons = []
+    # if not np.isnan(growth_gap):
+    #     if growth_gap > 0.05:
+    #         reasons.append(f"Growth expectations look beatable: revenue growth exceeds implied CAGR by {growth_gap}.") #{growth_gap:.1%}
+    #     elif growth_gap < -0.05:
+    #         reasons.append(f"Growth hurdle is demanding: implied CAGR exceeds current growth by {-growth_gap}.")
+    #     else:
+    #         reasons.append("Growth expectations look broadly fair versus current growth.")
+            
+    def pct(x):
+        if x is None or np.isnan(x):
+            return "n/a"
+        return f"{x*100:.1f}%"
+
     if not np.isnan(growth_gap):
+
         if growth_gap > 0.05:
-            reasons.append(f"Growth expectations look beatable: revenue growth exceeds implied CAGR by {growth_gap:.1%}.")
+            reasons.append(
+                f"Growth expectations look beatable: "
+                f"revenue growth {pct(rev_growth)} exceeds the market-implied CAGR "
+                f"of {pct(implied_cagr)}."
+            )
+
         elif growth_gap < -0.05:
-            reasons.append(f"Growth hurdle is demanding: implied CAGR exceeds current growth by {-growth_gap:.1%}.")
+            reasons.append(
+                f"Growth hurdle is demanding: "
+                f"the market is pricing {pct(implied_cagr)} CAGR versus "
+                f"current revenue growth of {pct(rev_growth)}."
+            )
+
         else:
-            reasons.append("Growth expectations look broadly fair versus current growth.")
+            reasons.append(
+                f"Growth expectations appear balanced: "
+                f"implied CAGR {pct(implied_cagr)} versus "
+                f"revenue growth {pct(rev_growth)}."
+            )
 
     if not np.isnan(roic_gap):
         if roic_gap > 0.05:

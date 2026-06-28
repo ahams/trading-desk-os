@@ -56,6 +56,48 @@ st.set_page_config(
 )
 
 
+
+def apply_theme():
+    st.markdown("""
+    <style>
+    .block-container {
+        padding-top: 1.5rem;
+        padding-bottom: 2rem;
+        max-width: 1400px;
+    }
+
+    div[data-testid="stMetric"] {
+        border: 1px solid rgba(128,128,128,0.25);
+        padding: 14px 16px;
+        border-radius: 14px;
+    }
+
+    .tdos-card {
+        border: 1px solid rgba(128,128,128,0.25);
+        border-radius: 18px;
+        padding: 20px;
+        margin-bottom: 18px;
+    }
+
+    .tdos-muted {
+        opacity: 0.72;
+        margin-bottom: 10px;
+    }
+
+    .tdos-pill {
+        display: inline-block;
+        background: #2563EB;
+        # color: white;
+        padding: 8px 14px;
+        border-radius: 999px;
+        font-weight: 700;
+    }
+
+    h1, h2, h3 {
+        letter-spacing: -0.02em;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 # =============================================================================
 # Helpers
 # =============================================================================
@@ -642,238 +684,238 @@ def render_action_cards(df):
 # Renderers
 # =============================================================================
 
-def render_analysis_card(data: Dict[str, Any]) -> None:
-    if not isinstance(data, dict):
-        st.warning("No analysis data returned")
-        return
+# def render_analysis_card(data: Dict[str, Any]) -> None:
+#     if not isinstance(data, dict):
+#         st.warning("No analysis data returned")
+#         return
 
-    ticker = data.get("ticker", "N/A")
-    decision = data.get("decision", "n/a")
-    setup = data.get("setup_type", "n/a")
-    regime = data.get("regime", "n/a")
-    theme = data.get("theme", "n/a")
+#     ticker = data.get("ticker", "N/A")
+#     decision = data.get("decision", "n/a")
+#     setup = data.get("setup_type", "n/a")
+#     regime = data.get("regime", "n/a")
+#     theme = data.get("theme", "n/a")
 
-    trade_plan = data.get("trade_plan") or {}
-    expected = data.get("trade_expectancy") or data.get("expected_return") or {}
-    scores = data.get("scores") or {}
-    reads = data.get("reads") or {}
+#     trade_plan = data.get("trade_plan") or {}
+#     expected = data.get("trade_expectancy") or data.get("expected_return") or {}
+#     scores = data.get("scores") or {}
+#     reads = data.get("reads") or {}
 
-    st.markdown(
-        f"""
-        <div style="border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-bottom:14px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <div>
-              <h2 style="margin:0;">{ticker}</h2>
-              <div style="color:#6b7280;">{setup} · Regime: {regime} · Theme: {theme}</div>
-            </div>
-            <div style="background:{decision_color(decision)};color:white;padding:8px 14px;border-radius:999px;font-weight:700;">
-              {decision}
-            </div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+#     st.markdown(
+#         f"""
+#         <div style="border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-bottom:14px;">
+#           <div style="display:flex;justify-content:space-between;align-items:center;">
+#             <div>
+#               <h2 style="margin:0;">{ticker}</h2>
+#               <div style="color:#6b7280;">{setup} · Regime: {regime} · Theme: {theme}</div>
+#             </div>
+#             <div style="background:{decision_color(decision)};color:white;padding:8px 14px;border-radius:999px;font-weight:700;">
+#               {decision}
+#             </div>
+#           </div>
+#         </div>
+#         """,
+#         unsafe_allow_html=True,
+#     )
 
-    c1, c2, c3, c4 = st.columns(4)
+#     c1, c2, c3, c4 = st.columns(4)
     
-    c1.metric("Decision ⓘ", data.get("decision", "n/a"), help=HELP["decision"])
-    c2.metric("Final Score ⓘ", data.get("final_score", "n/a"), help=HELP["final_score"])
-    te = expected.get("trade_expectancy_pct")
-    te_r = expected.get("trade_expectancy_r")
-    c3.metric(
-        "Trade Expectancy ⓘ",
-        "n/a" if te is None else f"{float(te):.1f}%",
-        "n/a" if te_r is None else f"{float(te_r):.2f}R",
-        help=HELP["trade_expectancy"],
-    )
-    c4.metric("Win Probability", fmt_pct(expected.get("probability_win")),help=HELP["win_probability"])
-    
-    
-    
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Reward %", expected.get("reward_pct", "n/a"),help=HELP["reward_pct"])
-    c2.metric("Risk %", expected.get("risk_pct", "n/a"),help=HELP["risk_pct"])
-    c3.metric("Scenario EV", expected.get("legacy_scenario_ev_pct", "n/a"),help=HELP["scenario_ev"])
-
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Entry", fmt_num(trade_plan.get("entry")))
-    c2.metric("Stop", fmt_num(trade_plan.get("stop")))
-    c3.metric("Target 1", fmt_num(trade_plan.get("target1")))
-    c4.metric("Target 2", fmt_num(trade_plan.get("target2")))
-    c5.metric("Risk/Reward", fmt_num(trade_plan.get("risk_reward")))
-
-    decision_layer = data.get("decision_layer") or {}
-
-    if decision_layer:
-        st.markdown("### Decision Layer")
-
-        c1, c2 = st.columns(2)
-        c1.metric(
-            "Investment View ⓘ",
-            decision_layer.get("investment_view", "n/a"),
-            f"{decision_layer.get('investment_score', 'n/a')}/100",
-            help=HELP["investment_view"],
-        )
-        c2.metric(
-            "Trading View ⓘ",
-            decision_layer.get("trading_view", "n/a"),
-            f"{decision_layer.get('trading_score', 'n/a')}/100",
-            help=HELP["trading_view"],
-        )
-
-        st.markdown("**Reason**")
-        st.write(decision_layer.get("reason", "n/a"))
-
-        st.markdown("**Action**")
-        st.success(decision_layer.get("action", "n/a"))
-    
-    tech_snap = data.get("technical_snapshot") or {}
-    if tech_snap:
-        st.markdown("### Technical Decomposition")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Trend Quality", safe_metric_value(tech_snap.get("trend_quality_score"), 1))
-        c1.caption(tech_snap.get("trend_signal", ""))
-        c2.metric("Entry Quality", safe_metric_value(tech_snap.get("entry_quality_score"), 1))
-        c2.caption(tech_snap.get("entry_signal", ""))
-        c3.metric("Leadership", safe_metric_value(tech_snap.get("leadership_score"), 1))
-        c3.caption(tech_snap.get("leadership_signal", ""))
-
-    cap = data.get("capital_structure_snapshot") or {}
-    neo = data.get("neocloud_snapshot") or {}
-    if cap or neo:
-        st.markdown("### Specialized Engines")
-        cols = st.columns(2)
-        with cols[0]:
-            if cap:
-                st.markdown("**Merton / Capital Structure**")
-                st.metric("Credit Score", safe_metric_value(cap.get("score"), 1))
-                st.caption(f"{cap.get('signal', 'n/a')} · Risk: {cap.get('risk', 'n/a')}")
-                st.write("Distance to Default:", cap.get("distance_to_default", "n/a"))
-                st.write("Annual PD Proxy:", cap.get("pd_annual_proxy_pct", "n/a"))
-        with cols[1]:
-            if neo and neo.get("signal") != "Not a Greenfield ARR/Capacity Valuation specific name":
-                st.markdown("**Greenfield ARR/Capacity**")
-                st.metric("Greenfield Score", safe_metric_value(neo.get("score"), 1))
-                st.caption(neo.get("signal", "n/a"))
-                st.write("EV / Current ARR:", neo.get("ev_current_arr", "n/a"))
-                st.write("EV / Target ARR:", neo.get("ev_target_arr", "n/a"))
-    
-    
-    opt = data.get("optionality_snapshot") or {}
-
-    if opt:
-        st.markdown("### Embedded Optionality")
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Optionality Score", opt.get("score", "n/a"))
-        c2.metric("Existing Business Value %", opt.get("existing_value_pct", "n/a"))
-        c3.metric("Embedded Future Option %", opt.get("embedded_optionality_pct", "n/a"))
-
-        st.caption(opt.get("signal", ""))
-
-        if opt.get("summary"):
-            st.info(opt.get("summary"))
-
-        bears = opt.get("bear_points") or []
-        bulls = opt.get("bull_points") or []
-
-        if bulls:
-            st.success(" | ".join(bulls))
-        if bears:
-            st.warning(" | ".join(bears))
-        st.markdown("### Desk Thesis")
-        st.write(data.get("final_thesis", "n/a"))
-
-    why_not = data.get("why_not_long_now") or []
-    if why_not:
-        st.markdown("### Why not long now / invalidation")
-        for item in why_not:
-            st.write(f"- {item}")
-
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("### Bull Case")
-        bull = data.get("main_bull_case") or []
-        if isinstance(bull, list):
-            for item in bull:
-                st.success(str(item))
-        else:
-            st.success(str(bull))
-    with c2:
-        st.markdown("### Bear Case")
-        bear = data.get("main_bear_case") or []
-        if isinstance(bear, list):
-            for item in bear:
-                st.error(str(item))
-        else:
-            st.error(str(bear))
-
-#new approach to use narratives instead of scores
-    narr = data.get("narrative") or {}
-
-    if narr:
-        st.markdown("### Investment Narrative")
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Investment Quality", narr.get("business_quality", {}).get("rating", "n/a"))
-        c2.metric("Market Expectations", narr.get("market_expectations", {}).get("rating", "n/a"))
-        c3.metric("Trading Conditions", narr.get("trading_conditions", {}).get("rating", "n/a"))
-
-        with st.container(border=True):
-            st.markdown("#### Business Quality")
-            for p in narr.get("business_quality", {}).get("points", []):
-                st.write(f"• {p}")
-
-        with st.container(border=True):
-            st.markdown("#### Market Expectations")
-            for p in narr.get("market_expectations", {}).get("points", []):
-                st.write(f"• {p}")
-
-        with st.container(border=True):
-            st.markdown("#### Trading Conditions")
-            for p in narr.get("trading_conditions", {}).get("points", []):
-                st.write(f"• {p}")
-
-        c1, c2 = st.columns(2)
-
-        with c1:
-            st.markdown("#### Primary Risks")
-            for p in narr.get("primary_risks", []):
-                st.warning(p)
-
-        with c2:
-            st.markdown("#### Opportunity")
-            for p in narr.get("opportunity", []):
-                st.success(p)
-
-        rec = narr.get("recommendation") or {}
-        st.markdown("#### Recommendation")
-        st.info(rec.get("summary", "n/a"))
-        st.success(rec.get("action", "n/a"))
-    else:
-        st.markdown("### Desk Thesis")
-        st.write(data.get("final_thesis", "n/a"))
+#     c1.metric("Decision ⓘ", data.get("decision", "n/a"), help=HELP["decision"])
+#     c2.metric("Final Score ⓘ", data.get("final_score", "n/a"), help=HELP["final_score"])
+#     te = expected.get("trade_expectancy_pct")
+#     te_r = expected.get("trade_expectancy_r")
+#     c3.metric(
+#         "Trade Expectancy ⓘ",
+#         "n/a" if te is None else f"{float(te):.1f}%",
+#         "n/a" if te_r is None else f"{float(te_r):.2f}R",
+#         help=HELP["trade_expectancy"],
+#     )
+#     c4.metric("Win Probability", fmt_pct(expected.get("probability_win")),help=HELP["win_probability"])
     
     
     
+#     c1, c2, c3 = st.columns(3)
+#     c1.metric("Reward %", expected.get("reward_pct", "n/a"),help=HELP["reward_pct"])
+#     c2.metric("Risk %", expected.get("risk_pct", "n/a"),help=HELP["risk_pct"])
+#     c3.metric("Scenario EV", expected.get("legacy_scenario_ev_pct", "n/a"),help=HELP["scenario_ev"])
+
+#     c1, c2, c3, c4, c5 = st.columns(5)
+#     c1.metric("Entry", fmt_num(trade_plan.get("entry")))
+#     c2.metric("Stop", fmt_num(trade_plan.get("stop")))
+#     c3.metric("Target 1", fmt_num(trade_plan.get("target1")))
+#     c4.metric("Target 2", fmt_num(trade_plan.get("target2")))
+#     c5.metric("Risk/Reward", fmt_num(trade_plan.get("risk_reward")))
+
+#     decision_layer = data.get("decision_layer") or {}
+
+#     if decision_layer:
+#         st.markdown("### Decision Layer")
+
+#         c1, c2 = st.columns(2)
+#         c1.metric(
+#             "Investment View ⓘ",
+#             decision_layer.get("investment_view", "n/a"),
+#             f"{decision_layer.get('investment_score', 'n/a')}/100",
+#             help=HELP["investment_view"],
+#         )
+#         c2.metric(
+#             "Trading View ⓘ",
+#             decision_layer.get("trading_view", "n/a"),
+#             f"{decision_layer.get('trading_score', 'n/a')}/100",
+#             help=HELP["trading_view"],
+#         )
+
+#         st.markdown("**Reason**")
+#         st.write(decision_layer.get("reason", "n/a"))
+
+#         st.markdown("**Action**")
+#         st.success(decision_layer.get("action", "n/a"))
+    
+#     tech_snap = data.get("technical_snapshot") or {}
+#     if tech_snap:
+#         st.markdown("### Technical Decomposition")
+#         c1, c2, c3 = st.columns(3)
+#         c1.metric("Trend Quality", safe_metric_value(tech_snap.get("trend_quality_score"), 1))
+#         c1.caption(tech_snap.get("trend_signal", ""))
+#         c2.metric("Entry Quality", safe_metric_value(tech_snap.get("entry_quality_score"), 1))
+#         c2.caption(tech_snap.get("entry_signal", ""))
+#         c3.metric("Leadership", safe_metric_value(tech_snap.get("leadership_score"), 1))
+#         c3.caption(tech_snap.get("leadership_signal", ""))
+
+#     cap = data.get("capital_structure_snapshot") or {}
+#     neo = data.get("neocloud_snapshot") or {}
+#     if cap or neo:
+#         st.markdown("### Specialized Engines")
+#         cols = st.columns(2)
+#         with cols[0]:
+#             if cap:
+#                 st.markdown("**Merton / Capital Structure**")
+#                 st.metric("Credit Score", safe_metric_value(cap.get("score"), 1))
+#                 st.caption(f"{cap.get('signal', 'n/a')} · Risk: {cap.get('risk', 'n/a')}")
+#                 st.write("Distance to Default:", cap.get("distance_to_default", "n/a"))
+#                 st.write("Annual PD Proxy:", cap.get("pd_annual_proxy_pct", "n/a"))
+#         with cols[1]:
+#             if neo and neo.get("signal") != "Not a Greenfield ARR/Capacity Valuation specific name":
+#                 st.markdown("**Greenfield ARR/Capacity**")
+#                 st.metric("Greenfield Score", safe_metric_value(neo.get("score"), 1))
+#                 st.caption(neo.get("signal", "n/a"))
+#                 st.write("EV / Current ARR:", neo.get("ev_current_arr", "n/a"))
+#                 st.write("EV / Target ARR:", neo.get("ev_target_arr", "n/a"))
     
     
-    if reads:
-        with st.expander("Key Reads", expanded=False):
-            for k, v in reads.items():
-                if v:
-                    st.markdown(f"**{k.replace('_', ' ').title()}:** {v}")
+#     opt = data.get("optionality_snapshot") or {}
 
-    if scores:
-        st.markdown("### Scores")
-        cols = st.columns(4)
-        for i, (k, v) in enumerate(scores.items()):
-            with cols[i % 4]:
-                render_score_bar(k.replace("_", " ").title(), v)
+#     if opt:
+#         st.markdown("### Embedded Optionality")
 
-    with st.expander("Raw response"):
-        st.json(data)
+#         c1, c2, c3 = st.columns(3)
+#         c1.metric("Optionality Score", opt.get("score", "n/a"))
+#         c2.metric("Existing Business Value %", opt.get("existing_value_pct", "n/a"))
+#         c3.metric("Embedded Future Option %", opt.get("embedded_optionality_pct", "n/a"))
+
+#         st.caption(opt.get("signal", ""))
+
+#         if opt.get("summary"):
+#             st.info(opt.get("summary"))
+
+#         bears = opt.get("bear_points") or []
+#         bulls = opt.get("bull_points") or []
+
+#         if bulls:
+#             st.success(" | ".join(bulls))
+#         if bears:
+#             st.warning(" | ".join(bears))
+#         st.markdown("### Desk Thesis")
+#         st.write(data.get("final_thesis", "n/a"))
+
+#     why_not = data.get("why_not_long_now") or []
+#     if why_not:
+#         st.markdown("### Why not long now / invalidation")
+#         for item in why_not:
+#             st.write(f"- {item}")
+
+#     c1, c2 = st.columns(2)
+#     with c1:
+#         st.markdown("### Bull Case")
+#         bull = data.get("main_bull_case") or []
+#         if isinstance(bull, list):
+#             for item in bull:
+#                 st.success(str(item))
+#         else:
+#             st.success(str(bull))
+#     with c2:
+#         st.markdown("### Bear Case")
+#         bear = data.get("main_bear_case") or []
+#         if isinstance(bear, list):
+#             for item in bear:
+#                 st.error(str(item))
+#         else:
+#             st.error(str(bear))
+
+# #new approach to use narratives instead of scores
+#     narr = data.get("narrative") or {}
+
+#     if narr:
+#         st.markdown("### Investment Narrative")
+
+#         c1, c2, c3 = st.columns(3)
+#         c1.metric("Investment Quality", narr.get("business_quality", {}).get("rating", "n/a"))
+#         c2.metric("Market Expectations", narr.get("market_expectations", {}).get("rating", "n/a"))
+#         c3.metric("Trading Conditions", narr.get("trading_conditions", {}).get("rating", "n/a"))
+
+#         with st.container(border=True):
+#             st.markdown("#### Business Quality")
+#             for p in narr.get("business_quality", {}).get("points", []):
+#                 st.write(f"• {p}")
+
+#         with st.container(border=True):
+#             st.markdown("#### Market Expectations")
+#             for p in narr.get("market_expectations", {}).get("points", []):
+#                 st.write(f"• {p}")
+
+#         with st.container(border=True):
+#             st.markdown("#### Trading Conditions")
+#             for p in narr.get("trading_conditions", {}).get("points", []):
+#                 st.write(f"• {p}")
+
+#         c1, c2 = st.columns(2)
+
+#         with c1:
+#             st.markdown("#### Primary Risks")
+#             for p in narr.get("primary_risks", []):
+#                 st.warning(p)
+
+#         with c2:
+#             st.markdown("#### Opportunity")
+#             for p in narr.get("opportunity", []):
+#                 st.success(p)
+
+#         rec = narr.get("recommendation") or {}
+#         st.markdown("#### Recommendation")
+#         st.info(rec.get("summary", "n/a"))
+#         st.success(rec.get("action", "n/a"))
+#     else:
+#         st.markdown("### Desk Thesis")
+#         st.write(data.get("final_thesis", "n/a"))
+    
+    
+    
+    
+    
+#     if reads:
+#         with st.expander("Key Reads", expanded=False):
+#             for k, v in reads.items():
+#                 if v:
+#                     st.markdown(f"**{k.replace('_', ' ').title()}:** {v}")
+
+#     if scores:
+#         st.markdown("### Scores")
+#         cols = st.columns(4)
+#         for i, (k, v) in enumerate(scores.items()):
+#             with cols[i % 4]:
+#                 render_score_bar(k.replace("_", " ").title(), v)
+
+#     with st.expander("Raw response"):
+#         st.json(data)
 
 def render_clean_daily_report(data: dict):
     st.subheader("Executive Summary")
@@ -912,10 +954,273 @@ def render_clean_daily_report(data: dict):
     if signal_ids:
         with st.expander("Saved Signal IDs"):
             st.write(signal_ids)
+            
+            
+            
+def render_header_card(data):
+    ticker = data.get("ticker", "N/A")
+    decision = data.get("decision", "n/a")
+    setup = data.get("setup_type", "n/a")
+    regime = data.get("regime", "n/a")
+    theme = data.get("theme", "n/a")
+
+    st.markdown(f"""
+    <div class="tdos-card">
+        <h2 style="margin-bottom:4px;">{ticker}</h2>
+        <div class="tdos-muted">{setup} · {regime} · {theme}</div>
+        <div class="tdos-pill">{decision}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_trade_plan(data):
+    plan = data.get("trade_plan") or {}
+    exp = data.get("trade_expectancy") or data.get("expected_return") or {}
+
+    st.markdown("### Trade Plan")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Trade Expectancy", f"{exp.get('trade_expectancy_pct', 'n/a')}%")
+    c2.metric("Win Probability", f"{exp.get('probability_win', 'n/a')}%")
+    c3.metric("Reward %", exp.get("reward_pct", "n/a"))
+    c4.metric("Risk %", exp.get("risk_pct", "n/a"))
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Entry", plan.get("entry", "n/a"))
+    c2.metric("Stop", plan.get("stop", "n/a"))
+    c3.metric("Target 1", plan.get("target1", "n/a"))
+    c4.metric("Target 2", plan.get("target2", "n/a"))
+    c5.metric("R/R", plan.get("risk_reward", "n/a"))
+
+
+def render_decision_layer(data):
+    layer = data.get("decision_layer") or {}
+    if not layer:
+        return
+
+    st.markdown("### Decision Layer")
+    c1, c2 = st.columns(2)
+    c1.metric("Investment View", layer.get("investment_view", "n/a"), f"{layer.get('investment_score', 'n/a')}/100")
+    c2.metric("Trading View", layer.get("trading_view", "n/a"), f"{layer.get('trading_score', 'n/a')}/100")
+
+    st.info(layer.get("reason", "n/a"))
+    st.success(layer.get("action", "n/a"))
+
+
+def render_investment_narrative(data):
+    narr = data.get("narrative") or {}
+    if not narr:
+        st.markdown("### Desk Thesis")
+        st.write(data.get("final_thesis", "n/a"))
+        return
+
+    st.markdown("### Investment Narrative")
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Investment Quality", narr.get("business_quality", {}).get("rating", "n/a"))
+    c2.metric("Market Expectations", narr.get("market_expectations", {}).get("rating", "n/a"))
+    c3.metric("Trading Conditions", narr.get("trading_conditions", {}).get("rating", "n/a"))
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        with st.container(border=True):
+            st.markdown("#### Business")
+            for p in narr.get("business_quality", {}).get("points", []):
+                st.write(f"• {p}")
+
+    with c2:
+        with st.container(border=True):
+            st.markdown("#### Expectations")
+            for p in narr.get("market_expectations", {}).get("points", []):
+                st.write(f"• {p}")
+
+    with c3:
+        with st.container(border=True):
+            st.markdown("#### Trading")
+            for p in narr.get("trading_conditions", {}).get("points", []):
+                st.write(f"• {p}")
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.markdown("#### Primary Risks")
+        for p in narr.get("primary_risks", []):
+            st.warning(p)
+
+    with c2:
+        st.markdown("#### Opportunity")
+        for p in narr.get("opportunity", []):
+            st.success(p)
+
+    rec = narr.get("recommendation") or {}
+    st.markdown("#### Recommendation")
+    st.info(rec.get("summary", "n/a"))
+    st.success(rec.get("action", "n/a"))
+
+
+def render_specialized_engines(data):
+    cap = data.get("capital_structure_snapshot") or {}
+    opt = data.get("optionality_snapshot") or {}
+    gf = data.get("greenfield_arr_snapshot") or {}
+
+    st.markdown("### Specialized Engines")
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        with st.container(border=True):
+            st.markdown("#### Merton / Credit")
+            st.metric("Credit Score", cap.get("score", "n/a"))
+            st.caption(f"{cap.get('signal', 'n/a')} · {cap.get('risk', 'n/a')}")
+            st.write("Distance to Default:", cap.get("distance_to_default", "n/a"))
+            st.write("Annual PD:", cap.get("pd_annual_proxy_pct", "n/a"))
+
+    with c2:
+        with st.container(border=True):
+            st.markdown("#### Future Value Premium")
+            st.metric("Optionality Score", opt.get("score", "n/a"))
+            st.caption(opt.get("signal", "n/a"))
+            st.write("Existing Value %:", opt.get("existing_value_pct", "n/a"))
+            st.write("Future Option %:", opt.get("embedded_optionality_pct", "n/a"))
+
+    with c3:
+        with st.container(border=True):
+            st.markdown("#### Greenfield ARR")
+            st.metric("Score", gf.get("score", "n/a"))
+            st.caption(gf.get("signal", "n/a"))
+            st.write("EV / Current ARR:", gf.get("ev_current_arr", "n/a"))
+            st.write("EV / Target ARR:", gf.get("ev_target_arr", "n/a"))
+
+
+def render_bull_bear(data):
+    st.markdown("### Bull / Bear Case")
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.markdown("#### Bull Case")
+        for p in data.get("main_bull_case") or []:
+            st.success(p)
+
+    with c2:
+        st.markdown("#### Bear Case")
+        for p in data.get("main_bear_case") or []:
+            st.error(p)
+
+
+def render_engine_scores(data):
+    scores = data.get("scores") or {}
+    if not scores:
+        return
+
+    st.markdown("### Engine Scores")
+    cols = st.columns(5)
+
+    for i, (k, v) in enumerate(scores.items()):
+        with cols[i % 5]:
+            st.metric(k.replace("_", " ").title(), f"{v}/100")
+            
+def render_analysis_card(data):
+    if not isinstance(data, dict):
+        st.warning("No analysis data returned.")
+        return
+
+    render_header_card(data)
+    render_decision_layer(data)
+    render_trade_plan(data)
+    render_investment_narrative(data)
+    render_specialized_engines(data)
+    render_bull_bear(data)
+    render_engine_scores(data)
+
+    with st.expander("Key Reads"):
+        reads = data.get("reads") or {}
+        for k, v in reads.items():
+            if v:
+                st.markdown(f"**{k.replace('_', ' ').title()}:** {v}")
+
+    with st.expander("Raw response"):
+        st.json(data)
+        
+def render_clean_dashboard(df):
+    st.markdown("### Top Opportunities")
+
+    top = df[
+        df["Decision"].astype(str).str.contains("Strong Long|Tactical Long", na=False)
+    ].sort_values("Final Score", ascending=False)
+
+    st.dataframe(
+        top[[
+            "Ticker", "Decision", "Setup", "Final Score",
+            "Trade Expectancy %", "Investment View", "Trading View",
+            "Theme"
+        ]].head(10),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.markdown("### Watchlist / Pullback Candidates")
+
+    watch = df[
+        df["Decision"].astype(str).str.contains("Watchlist|Constructive", na=False)
+    ].sort_values("Final Score", ascending=False)
+
+    st.dataframe(
+        watch[[
+            "Ticker", "Decision", "Setup", "Final Score",
+            "Trade Expectancy %", "Investment View", "Trading View", "Theme"
+        ]].head(10),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.markdown("### Risk Radar")
+
+    risk = df[
+        (df["Options"].fillna(50) < 40)
+        | (df["Game Theory"].fillna(50) < 50)
+        | (df["Technical"].fillna(50) < 45)
+        | (df["Merton"].fillna(100) < 50)
+    ]
+
+    st.dataframe(
+        risk[[
+            "Ticker", "Decision", "Final Score", "Options",
+            "Game Theory", "Technical", "Merton", "Theme"
+        ]].head(15),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.markdown("### Expectation Gap")
+
+    exp_cols = [
+        "Ticker", "Decision", "Final Score", "Expectation",
+        "Trade Expectancy %", "Theme"
+    ]
+
+    st.dataframe(
+        df[[c for c in exp_cols if c in df.columns]]
+        .sort_values("Expectation", ascending=False)
+        .head(15),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    with st.expander("Full Export"):
+        st.dataframe(df, use_container_width=True, hide_index=True)
 
 # =============================================================================
 # Sidebar
 # =============================================================================
+# theme_mode = st.sidebar.radio(
+#     "Appearance",
+#     ["Light", "Dark"],
+#     horizontal=True,
+# )
+
+# apply_theme()
+
+
 
 if "api_url" not in st.session_state:
     st.session_state.api_url = DEFAULT_API_URL

@@ -30,6 +30,11 @@ def _pct(x: Any, default: float = 0.0) -> float:
         return default
     return v / 100.0 if abs(v) > 1.5 else v
 
+def fmt_pct(x: Any, default: float = 0.0) -> str:
+    """
+    Accepts either 0.18 or 18 and always returns '18.0%'.
+    """
+    return f"{_pct(x, default):.1%}"
 
 def _safe_div(a: float, b: float, default: float = np.nan) -> float:
     try:
@@ -320,7 +325,7 @@ def optionality_score(
 
     if not np.isnan(implied_cagr) and not np.isnan(revenue_growth) and implied_cagr > revenue_growth * 1.5:
         bear_points.append(
-            f"Growth hurdle is demanding: implied CAGR {implied_cagr:.1f}% vs revenue growth {revenue_growth:.1f}%."
+            f"Growth hurdle is demanding: implied CAGR {fmt_pct(implied_cagr)} vs revenue growth {fmt_pct(revenue_growth)}."
         )
 
     if not np.isnan(roic) and not np.isnan(meroi):
