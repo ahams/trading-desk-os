@@ -1,5 +1,5 @@
 from __future__ import annotations
-from engines.narrative_engine import build_investment_narrative
+
 from typing import Any, Dict, List, Optional
 
 
@@ -75,7 +75,7 @@ def _why_not_long(result: Dict[str, Any]) -> List[str]:
 
     exp_pct = _pct(expected)
     if exp_pct is not None and exp_pct < 0:
-        reasons.append(f"Trade expectancy model is negative ({exp_pct}%), so the reward does not justify immediate long exposure.")
+        reasons.append(f"Expected-return model is negative ({exp_pct}%), so the reward does not justify immediate long exposure.")
 
     theme = metas.get("theme") or {}
     theme_score = _round(theme.get("total"), 1)
@@ -90,7 +90,7 @@ def _why_not_long(result: Dict[str, Any]) -> List[str]:
     neocloud = metas.get("neocloud") or {}
     neocloud_score = _round(neocloud.get("score"), 1)
     if neocloud_score is not None and neocloud_score < 50 and neocloud.get("signal") != "Not a NeoCloud-specific name":
-        reasons.append(f"Greenfield ARR/capacity valuation quality is weak ({neocloud_score}/100): {neocloud.get('signal', 'valuation risk')}.")
+        reasons.append(f"NeoCloud valuation/funding quality is weak ({neocloud_score}/100): {neocloud.get('signal', 'valuation risk')}.")
 
     if not reasons:
         reasons.append("No major blocker detected; decision is mainly constrained by final score/threshold discipline.")
@@ -99,10 +99,9 @@ def _why_not_long(result: Dict[str, Any]) -> List[str]:
 def harmonized_verdict(data: dict) -> dict:
     scores = data.get("scores", {}) or {}
     reads = data.get("reads", {}) or {}
-    expected = data.get("trade_expectancy") or data.get("expected_return") or {}
+    expected = data.get("expected_return", {}) or {}
     trade_plan = data.get("trade_plan", {}) or {}
-    decision_layer = data.get("decision_layer") or {}
-    
+
     final_score = float(data.get("final_score") or 50)
     technical = float(scores.get("technical") or 50)
     liquidity = float(scores.get("liquidity") or 50)
@@ -111,17 +110,14 @@ def harmonized_verdict(data: dict) -> dict:
     fundamental = float(scores.get("fundamental") or 50)
     expectation = float(scores.get("expectation") or 50)
     merton = float(scores.get("merton_credit") or scores.get("merton") or 50)
-    optionality = float(scores.get("optionality") or 50)
 
-    ev = (
-        expected.get("trade_expectancy_pct")
-        or expected.get("legacy_scenario_ev_pct")
-        or expected.get("ev_pct")
-    )
+    ev = expected.get("ev_pct")
     try:
         ev = float(ev)
-        # trade_expectancy_pct is already percent in compact output.
-        ev_pct = ev * 100 if abs(ev) <= 1.5 else ev
+        if abs(ev) <= 1.5:
+            ev_pct = ev * 100
+        else:
+            ev_pct = ev
     except Exception:
         ev_pct = None
 
@@ -138,8 +134,6 @@ def harmonized_verdict(data: dict) -> dict:
         bull_count += 1
     if merton >= 70:
         bull_count += 1
-    if optionality >= 70:
-        bull_count += 1
     if ev_pct is not None and ev_pct > 0:
         bull_count += 1
 
@@ -152,8 +146,6 @@ def harmonized_verdict(data: dict) -> dict:
     if liquidity < 45:
         bear_count += 1
     if ev_pct is not None and ev_pct < 0:
-        bear_count += 1
-    if optionality < 45:
         bear_count += 1
 
     # Harmonized decision
@@ -189,13 +181,7 @@ def harmonized_verdict(data: dict) -> dict:
         f"{data.get('ticker')}: {decision}. "
         f"Final score {final_score:.1f}/100. Setup: {setup_type}."
     )
-    if decision_layer:
-        thesis_parts.append(
-            f"Investment view: {decision_layer.get('investment_view')}. "
-            f"Trading view: {decision_layer.get('trading_view')}. "
-            f"Reason: {decision_layer.get('reason')} "
-            f"Action: {decision_layer.get('action')}"
-    )
+
     if bull_count >= 4:
         thesis_parts.append(
             "Bull case is supported by strong fundamentals, positive expectation setup, "
@@ -215,16 +201,23 @@ def harmonized_verdict(data: dict) -> dict:
 
     if ev_pct is not None:
         if ev_pct > 1:
-            thesis_parts.append(f"Expected-return model is supportive with EV around {ev_pct:.1f}%.")
-        elif ev_pct >= 0:
-            thesis_parts.append(f"Expected-return model is only mildly positive at {ev_pct:.1f}%, so position size should be controlled.")
-        else:
-            thesis_parts.append(f"Expected-return model is slightly negative at {ev_pct:.1f}%, so this is a watchlist/pullback setup rather than a full long signal.")
-        if trade_plan:
             thesis_parts.append(
-                f"Trade plan: entry {trade_plan.get('entry')}, stop {trade_plan.get('stop')}, "
-                f"target1 {trade_plan.get('target1')}, target2 {trade_plan.get('target2')}."
+                f"Trade expectancy is favorable at {ev_pct:.1f}%."
             )
+        elif ev_pct >= 0:
+            thesis_parts.append(
+                f"Trade expectancy is marginal at {ev_pct:.1f}%."
+            )
+        else:
+            thesis_parts.append(
+                f"Trade expectancy is slightly negative at {ev_pct:.1f}%, suggesting a better entry may exist."
+            )
+
+    if trade_plan:
+        thesis_parts.append(
+            f"Trade plan: entry {trade_plan.get('entry')}, stop {trade_plan.get('stop')}, "
+            f"target1 {trade_plan.get('target1')}, target2 {trade_plan.get('target2')}."
+        )
 
     return {
         "decision": decision,
@@ -251,85 +244,122 @@ def _greenfield_arr_read(ticker, meta):
         )
 
     return meta.get("summary")
-#. adding expectation investing angel
-def expectation_bull_bear_flags(data: dict) -> tuple[list[str], list[str]]:
+
+
+
+def _safe_float(x: Any, default: float = 50.0) -> float:
+    try:
+        return default if x is None else float(x)
+    except Exception:
+        return default
+
+
+def _expectation_snapshot(meta: Dict[str, Any]) -> Dict[str, Any]:
+    meta = meta or {}
+    return {
+        "signal": meta.get("expectation_signal") or meta.get("signal"),
+        "read": meta.get("expectation_read") or meta.get("summary"),
+        "implied_cagr_pct": _pct(meta.get("implied_cagr")),
+        "revenue_growth_pct": _pct(meta.get("revenue_growth")),
+        "market_implied_cap_years": _round(meta.get("market_implied_cap") or meta.get("cap_years"), 1),
+        "roic_pct": _pct(meta.get("roic")),
+        "meroi_pct": _pct(meta.get("meroi")),
+        "growth_gap_pct": _pct(meta.get("growth_gap")),
+        "roic_gap_pct": _pct(meta.get("roic_gap")),
+        "expectation_hurdle": meta.get("expectation_hurdle"),
+        "expectations_gap": _round(meta.get("expectations_gap"), 1),
+    }
+
+
+def _optionality_snapshot(meta: Dict[str, Any]) -> Dict[str, Any]:
+    meta = meta or {}
+    metrics = meta.get("metrics") or {}
+    context = meta.get("expectation_context") or {}
+    return {
+        "score": _round(meta.get("score"), 1),
+        "signal": meta.get("signal"),
+        "summary": meta.get("summary"),
+        "existing_business_value": _round(metrics.get("existing_business_value"), 0),
+        "embedded_option_value": _round(metrics.get("embedded_option_value"), 0),
+        "existing_value_pct": _pct(metrics.get("existing_value_pct")),
+        "embedded_optionality_pct": _pct(metrics.get("embedded_optionality_pct")),
+        "enterprise_value": _round(metrics.get("enterprise_value"), 0),
+        "market_cap": _round(metrics.get("market_cap"), 0),
+        "implied_cagr_pct": _pct(context.get("implied_cagr")),
+        "revenue_growth_pct": _pct(context.get("revenue_growth")),
+        "market_implied_cap_years": _round(context.get("market_implied_cap"), 1),
+        "roic_pct": _pct(context.get("roic")),
+        "meroi_pct": _pct(context.get("meroi")),
+    }
+
+
+def split_investment_vs_trading_view(data: Dict[str, Any]) -> Dict[str, Any]:
     scores = data.get("scores") or {}
-    reads = data.get("reads") or {}
-    metas = data.get("metas") or {}
+    trade = data.get("trade_expectancy") or data.get("expected_return") or {}
 
-    exp_score = scores.get("expectation")
-    exp_read = reads.get("expectation") or ""
+    fundamental = _safe_float(scores.get("fundamental"))
+    expectation = _safe_float(scores.get("expectation"))
+    merton = _safe_float(scores.get("merton_credit") or scores.get("merton"))
+    optionality = _safe_float(scores.get("optionality"),
+                              _safe_float(scores.get("greenfield_arr_valuation")))
 
-    exp_meta = (
-        metas.get("expectation")
-        or data.get("expectation_meta")
-        or data.get("expectation_snapshot")
-        or {}
+    technical = _safe_float(scores.get("technical"))
+    liquidity = _safe_float(scores.get("liquidity"))
+    options = _safe_float(scores.get("options"))
+    game = _safe_float(scores.get("game_theory") or scores.get("game"))
+
+    investment_score = round(
+        0.32 * fundamental + 0.28 * expectation + 0.23 * merton + 0.17 * optionality, 1
+    )
+    trading_score = round(
+        0.35 * technical + 0.25 * liquidity + 0.20 * options + 0.20 * game, 1
     )
 
-    bulls, bears = [], []
-
-    implied_cagr = exp_meta.get("implied_cagr")
-    revenue_growth = exp_meta.get("revenue_growth")
-    cap_years = exp_meta.get("market_implied_cap")
-    roic = exp_meta.get("roic")
-    meroi = exp_meta.get("meroi")
-
-    # Fallback from read string when metadata is not yet surfaced
-    if "Expectations demanding" in exp_read:
-        bears.append(f"Expectation hurdle is demanding: {exp_read.replace('Expectation investing: ', '')}")
-    elif "Expectations beatable" in exp_read or "beatable" in exp_read.lower():
-        bulls.append(f"Expectations look beatable: {exp_read.replace('Expectation investing: ', '')}")
-
-    if implied_cagr is not None and revenue_growth is not None:
-        try:
-            if implied_cagr > revenue_growth * 1.5:
-                bears.append(
-                    f"Market-implied growth looks demanding: implied CAGR {implied_cagr:.1f}% vs current revenue growth {revenue_growth:.1f}%."
-                )
-            elif revenue_growth > implied_cagr:
-                bulls.append(
-                    f"Current growth exceeds market hurdle: revenue growth {revenue_growth:.1f}% vs implied CAGR {implied_cagr:.1f}%."
-                )
-        except Exception:
-            pass
-
-    if roic is not None and meroi is not None:
-        try:
-            if roic < meroi * 0.75:
-                bears.append(
-                    f"Value-creation hurdle is high: ROIC {roic:.1f}% vs MEROI {meroi:.1f}%."
-                )
-            elif roic > meroi:
-                bulls.append(
-                    f"ROIC exceeds market-implied reinvestment hurdle: ROIC {roic:.1f}% vs MEROI {meroi:.1f}%."
-                )
-        except Exception:
-            pass
-
-    if cap_years is not None:
-        try:
-            if cap_years >= 15:
-                bears.append(
-                    f"Market prices in a long competitive advantage period: CAP {cap_years} years."
-                )
-            elif cap_years <= 7:
-                bulls.append(
-                    f"Market embeds a modest competitive advantage period: CAP {cap_years} years."
-                )
-        except Exception:
-            pass
-
-    # Score fallback
+    expectancy = trade.get("trade_expectancy_pct")
+    if expectancy is None:
+        expectancy = trade.get("ev_pct")
     try:
-        if exp_score is not None and float(exp_score) >= 70 and not bulls:
-            bulls.append("Expectation score is supportive.")
-        elif exp_score is not None and float(exp_score) <= 45 and not bears:
-            bears.append("Expectation score signals demanding assumptions.")
+        expectancy = float(expectancy)
     except Exception:
-        pass
+        expectancy = None
 
-    return bulls[:3], bears[:3]
+    investment_view = (
+        "Bullish" if investment_score >= 75 else
+        "Constructive" if investment_score >= 60 else
+        "Bearish" if investment_score < 40 else
+        "Neutral"
+    )
+    trading_view = (
+        "Bullish" if trading_score >= 70 and (expectancy is None or expectancy > 0) else
+        "Constructive / Wait for confirmation" if trading_score >= 58 else
+        "Bearish" if trading_score < 40 else
+        "Neutral"
+    )
+
+    if investment_view in {"Bullish", "Constructive"} and trading_view.startswith("Constructive"):
+        reason = "Investment evidence is supportive, but the near-term setup still requires cleaner confirmation."
+        action = "Accumulate selectively on pullbacks or wait for a confirmed breakout."
+    elif investment_view == "Bullish" and trading_view == "Bullish":
+        reason = "Long-term investment quality and near-term trading conditions are aligned."
+        action = "A tactical long is justified with the stated stop and position sizing."
+    elif investment_view in {"Neutral", "Bearish"} and trading_view == "Bullish":
+        reason = "Near-term momentum is stronger than the underlying investment case."
+        action = "Treat this as a tactical trade rather than a core investment."
+    elif investment_view in {"Bullish", "Constructive"} and trading_view == "Bearish":
+        reason = "The longer-term thesis is intact, but current tape conditions are adverse."
+        action = "Do not chase; wait for stabilization and renewed liquidity confirmation."
+    else:
+        reason = "Investment and trading evidence do not yet provide a sufficiently clear edge."
+        action = "Review evidence before acting."
+
+    return {
+        "investment_view": investment_view,
+        "investment_score": investment_score,
+        "trading_view": trading_view,
+        "trading_score": trading_score,
+        "reason": reason,
+        "action": action,
+    }
 
 def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -375,20 +405,10 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
     if scores.get("merton") and float(scores.get("merton")) >= 70:
         bull_points.append(f"Capital structure supportive / low credit risk ({_round(scores.get('merton'), 1)}/100).")
     if scores.get("neocloud") and float(scores.get("neocloud")) >= 70:
-        bull_points.append(f"Greenfield ARR/capacity valuation supportive ({_round(scores.get('neocloud'), 1)}/100).")
-    if scores.get("optionality") and float(scores.get("optionality")) >= 70:
-        bull_points.append(f"Embedded optionality appears attractive ({_round(scores.get('optionality'), 1)}/100).")
+        bull_points.append(f"NeoCloud capacity/ARR valuation supportive ({_round(scores.get('neocloud'), 1)}/100).")
     if result.get("regime"):
         bull_points.append(f"Market regime: {result.get('regime')}.")
 
-    # ==========================================================
-# Optionality Bull Factors (Merton)
-# ==========================================================
-
-    for p in optionality_meta.get("bull_points", []):
-        if p not in bull_points:
-            bull_points.append(p)
-    
     bear_points = []
     if scores.get("technical") and float(scores.get("technical")) < 50:
         bear_points.append(f"Technical score weak ({_round(scores.get('technical'), 1)}/100).")
@@ -401,18 +421,8 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
     if scores.get("merton") and float(scores.get("merton")) < 50:
         bear_points.append(f"Capital-structure risk elevated ({_round(scores.get('merton'), 1)}/100).")
     if scores.get("neocloud") and float(scores.get("neocloud")) < 50 and neocloud_meta.get("signal") != "Not a NeoCloud-specific name":
-        bear_points.append(f"Greenfield ARR/capacity valuation risk elevated ({_round(scores.get('neocloud'), 1)}/100).")
-    if scores.get("optionality") and float(scores.get("optionality")) < 50:
-        bear_points.append(f"Market may already be pricing significant future optionality ({_round(scores.get('optionality'), 1)}/100).")
+        bear_points.append(f"NeoCloud valuation/funding risk elevated ({_round(scores.get('neocloud'), 1)}/100).")
 
-    # ==========================================================
-# Optionality Bear Factors
-# ==========================================================
-
-    for p in optionality_meta.get("bear_points", []):
-        if p not in bear_points:
-            bear_points.append(p)
-    
     trade_plan = {
         "entry": _round(result.get("entry"), 2),
         "stop": _round(result.get("stop"), 2),
@@ -423,19 +433,22 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
         "invalidates_if": blockers[:3] if blockers else ["Breaks stop or thesis drivers deteriorate."],
     }
 
-    # This is short-term trade expectancy, not long-term investment expected return.
-    trade_expectancy = {
-        "trade_expectancy_pct": _pct(result.get("trade_expectancy_pct")),
-        "trade_expectancy_r": _round(result.get("trade_expectancy_r"), 2),
-        "reward_pct": _pct(result.get("reward_pct")),
-        "risk_pct": _pct(result.get("risk_pct")),
+    expected_return = {
+        "ev_pct": _pct(result.get("expected_return")),
+        "expected_r": _round(result.get("expected_r"), 2),
         "probability_win": _pct(result.get("probability_win")),
-        "legacy_scenario_ev_pct": _pct(result.get("expected_return")),
         "read": summary.get("expected_return"),
     }
 
-    # Backward-compatible alias for older frontend/API clients.
-    expected_return = trade_expectancy
+    trade_expectancy = {
+        "trade_expectancy_pct": _pct(result.get("trade_expectancy_pct")),
+        "trade_expectancy_r": _round(result.get("trade_expectancy_r"), 2),
+        "probability_win": _pct(result.get("probability_win")),
+        "reward_pct": _pct(result.get("reward_pct")),
+        "risk_pct": _pct(result.get("risk_pct")),
+        "read": summary.get("expected_return"),
+    }
+
     participant_map = game_meta.get("participant_map") or {}
     dominant_participants = {}
     for k, v in participant_map.items():
@@ -455,8 +468,8 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
         "regime": result.get("regime"),
         "theme": result.get("theme"),
         "trade_plan": trade_plan,
+        "expected_return": expected_return,
         "trade_expectancy": trade_expectancy,
-        "expected_return": trade_expectancy,#legacy compatablity        
         "scores": {
             "fundamental": _round(scores.get("fundamental"), 1),
             "technical": _round(scores.get("technical"), 1),
@@ -469,9 +482,6 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
             "greenfield_arr_valuation": _round(scores.get("neocloud"), 1),
             "optionality": _round(scores.get("optionality"), 1),
         },
-        
-        
-        
         "main_bull_case": bull_points[:5] or [summary.get("fundamental") or "No clear bull case detected."],
         "main_bear_case": bear_points[:5] or ["No major bearish factor detected."],
         "why_not_long_now": blockers,
@@ -483,23 +493,13 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
             "catalyst": summary.get("catalyst"),
             "expectation": expected_meta.get("expectation_read") or summary.get("expectation"),
             "merton_credit": merton_meta.get("summary") or summary.get("merton"),
-            "greenfield_arr_valuation": _greenfield_arr_read(result.get("ticker"), neocloud_meta),
+            "greenfield_arr_valuation": (
+            neocloud_meta.get("summary")
+            or summary.get("neocloud")
+            or "Greenfield ARR/capacity valuation not available."
+        ),
             "theme": theme_meta.get("summary"),
-            "optionality": optionality_meta.get("summary"),
         },
-        
-        "expectation_snapshot": {
-            "score": _round(scores.get("expectation"), 1),
-            "read": expected_meta.get("expectation_read") or summary.get("expectation"),
-            "expectations_gap": _round((metas.get("expectation") or {}).get("expectations_gap"), 1),
-            "implied_cagr": _round((metas.get("expectation") or {}).get("implied_cagr"), 1),
-            "revenue_growth": _round((metas.get("expectation") or {}).get("revenue_growth"), 1),
-            "market_implied_cap": (metas.get("expectation") or {}).get("market_implied_cap"),
-            "roic": _round((metas.get("expectation") or {}).get("roic"), 1),
-            "meroi": _round((metas.get("expectation") or {}).get("meroi"), 1),
-            "signal": (metas.get("expectation") or {}).get("signal"),
-            
-        },  
         "options_snapshot": {
             "expiry": options_meta.get("expiry"),
             "put_call_oi": _round(options_meta.get("put_call_oi"), 2),
@@ -533,31 +533,27 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
             "secured_power_mw": _round((neocloud_meta.get("metrics") or {}).get("secured_power_mw"), 0),
             "gpu_count": _round((neocloud_meta.get("metrics") or {}).get("gpu_count"), 0),
         },
-        "optionality_snapshot": {
-            "score": _round(optionality_meta.get("score"), 1),
-            "signal": optionality_meta.get("signal"),
-            "summary": optionality_meta.get("summary"),
-            "embedded_optionality_pct": _pct((optionality_meta.get("metrics") or {}).get("embedded_optionality_pct")),
-            "existing_value_pct": _pct((optionality_meta.get("metrics") or {}).get("existing_value_pct")),
-            "enterprise_value": _round((optionality_meta.get("metrics") or {}).get("enterprise_value"), 0),
-            "existing_business_value": _round((optionality_meta.get("metrics") or {}).get("existing_business_value"), 0),
-            "embedded_option_value": _round((optionality_meta.get("metrics") or {}).get("embedded_option_value"), 0),
-            "bull_points": optionality_meta.get("bull_points") or [],
-            "bear_points": optionality_meta.get("bear_points") or [],
-        },
+        "expectation_snapshot": _expectation_snapshot(expected_meta),
+        "optionality_snapshot": _optionality_snapshot(optionality_meta),
         "final_thesis": result.get("thesis"),
+
+        # Phase-1 investment-committee interpretation. The legacy decision
+        # remains authoritative while reasoning runs in shadow mode.
+        "reasoning": result.get("reasoning") or {
+            "enabled": False,
+            "shadow_mode": True,
+            "status": "not_available",
+            "legacy_decision": decision,
+        },
     }
-    
-    decision_layer = split_investment_vs_trading_view(compact)
+
+    compact["decision_layer"] = split_investment_vs_trading_view(compact)
 
     verdict = harmonized_verdict(compact)
 
     compact["decision"] = verdict["decision"]
     compact["setup_type"] = verdict["setup_type"]
-    compact["final_thesis"] = verdict["final_thesis"]  
-    compact["decision_layer"] = decision_layer 
-    compact["narrative"] = build_investment_narrative(compact)
-    compact["final_thesis"] = compact["narrative"]["executive_summary"]
+    compact["final_thesis"] = verdict["final_thesis"]   
     return compact
 
 
@@ -570,85 +566,4 @@ def compact_scanner(scan_result: Dict[str, Any], top_n: int = 20) -> Dict[str, A
         "count": len(compact_rows),
         "results": compact_rows,
         "errors": scan_result.get("errors", []),
-    }
-
-def split_investment_vs_trading_view(data: dict) -> dict:
-    scores = data.get("scores", {}) or {}
-    trade = data.get("trade_expectancy") or data.get("expected_return") or {}
-
-    fundamental = float(scores.get("fundamental") or 50)
-    expectation = float(scores.get("expectation") or 50)
-    merton = float(scores.get("merton_credit") or 50)
-    greenfield = float(scores.get("greenfield_arr_valuation") or 50)
-    optionality = float(scores.get("optionality") or 50)
-
-    technical = float(scores.get("technical") or 50)
-    liquidity = float(scores.get("liquidity") or 50)
-    options = float(scores.get("options") or 50)
-    game = float(scores.get("game_theory") or 50)
-
-    ev = trade.get("ev_pct")
-    try:
-        ev = float(ev)
-    except Exception:
-        ev = None
-
-    investment_score = round(
-        0.30 * fundamental
-        + 0.25 * expectation
-        + 0.20 * merton
-        + 0.10 * greenfield
-        + 0.15 * optionality,
-        1,
-    )
-
-    trading_score = round(
-        0.35 * technical
-        + 0.25 * liquidity
-        + 0.20 * options
-        + 0.20 * game,
-        1,
-    )
-
-    if investment_score >= 70:
-        investment_view = "Bullish"
-    elif investment_score >= 55:
-        investment_view = "Constructive"
-    elif investment_score <= 40:
-        investment_view = "Bearish"
-    else:
-        investment_view = "Neutral"
-
-    if trading_score >= 70 and (ev is None or ev > 0):
-        trading_view = "Bullish"
-    elif trading_score >= 55:
-        trading_view = "Neutral / Wait for confirmation"
-    elif trading_score <= 40:
-        trading_view = "Bearish"
-    else:
-        trading_view = "Neutral"
-
-    if investment_view in ["Bullish", "Constructive"] and "Neutral" in trading_view:
-        reason = "Business quality and capital structure are supportive, but near-term trading confirmation is incomplete."
-        action = "Accumulate on pullbacks or wait for a cleaner breakout/reclaim."
-    elif investment_view == "Bullish" and trading_view == "Bullish":
-        reason = "Business quality and near-term trading setup are aligned."
-        action = "Tactical long is justified with defined stop and target."
-    elif investment_view in ["Neutral", "Bearish"] and trading_view == "Bullish":
-        reason = "Near-term momentum is strong, but investment quality is not fully supportive."
-        action = "Treat as a tactical trade only, not a core position."
-    elif investment_view == "Bearish" and trading_view in ["Bearish", "Neutral"]:
-        reason = "Both investment quality and trading setup are weak."
-        action = "Avoid or consider short setups only after confirmation."
-    else:
-        reason = "Signals are mixed across business quality and trading setup."
-        action = "Keep on watchlist until alignment improves."
-
-    return {
-        "investment_score": investment_score,
-        "trading_score": trading_score,
-        "investment_view": investment_view,
-        "trading_view": trading_view,
-        "reason": reason,
-        "action": action,
     }
