@@ -35,10 +35,13 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from dotenv import load_dotenv
-
+ENV_FILE = Path("/Users/abdulhameed/ibalgo/ibkralgo/pro_trading_desk/.env")
+load_dotenv(ENV_FILE)
 # Load .env from project root
-load_dotenv()
-
+# load_dotenv()
+print("Loading .env from:", ENV_FILE)
+print("Exists:", ENV_FILE.exists())
+print("Admin key:", os.getenv("TDO_ADMIN_BOOTSTRAP_KEY"))
 
 @dataclass(frozen=True)
 class Settings:
@@ -94,7 +97,7 @@ class Settings:
 
     admin_bootstrap_key: str = os.getenv(
         "TDO_ADMIN_BOOTSTRAP_KEY",
-        "dev-admin-key-change-me"
+        "tdos_admin_0yx2AD_5qYD8kLUcuxL0gHqixz4__wETUnrx9VW2N1e43XW-WEka3vlQLkPnJq8X"
     )
 
     # =========================
@@ -103,7 +106,7 @@ class Settings:
 
     tdos_api_key: str = os.getenv(
         "STOCK_API_KEY",
-        ""
+        "tdo_FHMTu_NvdvhLu6r0qx6tW-SohQhpBTUDb5Bc66A1Z2Q"
     )
 
     tdos_api_url: str = os.getenv(

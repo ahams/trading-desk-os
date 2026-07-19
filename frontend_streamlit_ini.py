@@ -103,7 +103,7 @@ def apply_theme():
 # =============================================================================
 
 DEFAULT_API_URL = os.getenv("TDOS_API_URL", "http://127.0.0.1:8000")
-DEFAULT_API_KEY = os.getenv("TDOS_API_KEY", "tdo_lQGDF7OVvu4rK1R1cExWR_nEt-PvpWFnkJuLkfbiEaA")
+DEFAULT_API_KEY = os.getenv("TDOS_API_KEY", "")
 
 
 def normalize_base_url(url: str) -> str:
@@ -655,73 +655,31 @@ def render_risk_radar(df):
     )
 
 
-def _metric_or_dash(value, suffix="", decimals=1):
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return "—"
-    try:
-        return f"{float(value):.{decimals}f}{suffix}"
-    except Exception:
-        return f"{value}{suffix}"
-
-
 def render_action_cards(df):
-    """
-    Scanner cards optimized for scanning.
-
-    The old implementation hard-truncated the thesis to 350 characters.
-    This version shows the key action first and puts the complete thesis,
-    setup, trade levels, and scores inside an expander.
-    """
     df = ensure_scanner_columns(df)
     if df.empty:
         st.warning("No rows available.")
         return
-
     st.subheader("Action Cards")
-    top = df.sort_values("Final Score", ascending=False).head(8)
+
+    top = df.sort_values("Final Score", ascending=False).head(6)
 
     for _, row in top.iterrows():
-        ticker = row.get("Ticker", "n/a")
-        decision = row.get("Decision", "n/a")
-        setup = row.get("Setup", "n/a")
-        thesis = str(row.get("Thesis") or "No thesis available.")
-
         with st.container(border=True):
-            h1, h2, h3 = st.columns([1, 1.3, 2.7])
-            h1.metric("Ticker", ticker)
-            h2.metric("Decision", decision)
-            h3.markdown(f"**Setup**  \\n{setup}")
+            c1, c2, c3 = st.columns([1, 1, 2])
+
+            c1.metric("Ticker", row.get("Ticker", "n/a"))
+            c2.metric("Decision", row.get("Decision", "n/a"))
+
+            c3.write(f"**Setup:** {row.get('Setup', 'n/a')}")
+            thesis = row.get("Thesis") or "No thesis available."
+            c3.write(f"**Action:** {str(thesis)[:350]}...")
 
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Final Score", _metric_or_dash(row.get("Final Score")))
-            m2.metric("Trade Exp.", _metric_or_dash(row.get("Trade Expectancy %"), "%"))
-            m3.metric("Inv. Score", _metric_or_dash(row.get("Investment Score")))
-            m4.metric("Trading Score", _metric_or_dash(row.get("Trading Score")))
-
-            if "wait" in str(setup).lower() or "watchlist" in str(setup).lower():
-                st.info("Action: Wait for the stated pullback, breakout, or confirmation trigger.")
-            elif "short" in str(decision).lower() or "avoid" in str(decision).lower():
-                st.warning("Action: Avoid new long exposure; review the bear case and invalidation levels.")
-            else:
-                st.success("Action: Review the trade plan and execute only within the stated risk limits.")
-
-            with st.expander(f"Why {ticker}? Full desk view", expanded=False):
-                st.markdown("#### Full thesis")
-                st.write(thesis)
-
-                p1, p2, p3, p4, p5 = st.columns(5)
-                p1.metric("Entry", _metric_or_dash(row.get("Entry"), decimals=2))
-                p2.metric("Stop", _metric_or_dash(row.get("Stop"), decimals=2))
-                p3.metric("Target 1", _metric_or_dash(row.get("Target 1"), decimals=2))
-                p4.metric("Target 2", _metric_or_dash(row.get("Target 2"), decimals=2))
-                p5.metric("R/R", _metric_or_dash(row.get("R/R"), decimals=2))
-
-                st.caption(
-                    "The scanner card is a summary. Open the single-stock analysis "
-                    "for witness evidence, participant behavior, assumptions, and invalidators."
-                )
-
-
+            m1.metric("Final Score", row.get("Final Score", "n/a"))
+            m2.metric("Trade Exp.", row.get("Trade Expectancy %", "n/a"))
+            m3.metric("Inv. Score", row.get("Investment Score", "n/a"))
+            m4.metric("Trading Score", row.get("Trading Score", "n/a"))
 # =============================================================================
 # Renderers
 # =============================================================================
@@ -1161,254 +1119,6 @@ def render_engine_scores(data):
         with cols[i % 5]:
             st.metric(k.replace("_", " ").title(), f"{v}/100")
             
-
-def _find_witness(data, *engine_names):
-    reasoning = data.get("reasoning") or {}
-    witnesses = reasoning.get("witnesses") or []
-    wanted = {str(x).lower() for x in engine_names}
-    for witness in witnesses:
-        if str(witness.get("engine", "")).lower() in wanted:
-            return witness
-    return {}
-
-
-def _render_evidence_list(title, values, kind="info"):
-    values = [str(v) for v in (values or []) if v]
-    if not values:
-        st.caption(f"No {title.lower()} available.")
-        return
-    st.markdown(f"#### {title}")
-    for value in values:
-        if kind == "success":
-            st.success(value)
-        elif kind == "warning":
-            st.warning(value)
-        elif kind == "error":
-            st.error(value)
-        else:
-            st.info(value)
-
-
-def _render_witness_header(witness, fallback_score=None):
-    score = witness.get("score", fallback_score)
-    direction = witness.get("direction", "neutral")
-    confidence = witness.get("confidence")
-    strength = witness.get("strength")
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Score", _metric_or_dash(score))
-    c2.metric("Direction", str(direction).title())
-    c3.metric(
-        "Confidence",
-        _metric_or_dash(float(confidence) * 100 if confidence is not None else None, "%"),
-    )
-    c4.metric("Committee Strength", _metric_or_dash(strength, decimals=3))
-
-    claim = witness.get("claim")
-    if claim:
-        st.info(claim)
-
-
-def compact_number(value):
-    try:
-        value = float(value)
-    except Exception:
-        return "—"
-    magnitude = abs(value)
-    if magnitude >= 1_000_000_000_000:
-        return f"${value / 1_000_000_000_000:.2f}T"
-    if magnitude >= 1_000_000_000:
-        return f"${value / 1_000_000_000:.2f}B"
-    if magnitude >= 1_000_000:
-        return f"${value / 1_000_000:.2f}M"
-    return f"${value:,.0f}"
-
-
-def render_game_theory_explainer(data):
-    snap = data.get("game_theory_snapshot") or {}
-    witness = _find_witness(data, "game")
-    scores = data.get("scores") or {}
-    _render_witness_header(witness, scores.get("game_theory"))
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Forced Flow", _metric_or_dash(snap.get("forced_flow_score")))
-    c2.metric("Short Squeeze", _metric_or_dash(snap.get("short_squeeze_score")))
-    c3.metric("Gamma Squeeze", _metric_or_dash(snap.get("gamma_squeeze_score")))
-    c4.metric("Pinning Risk", _metric_or_dash(snap.get("pinning_risk_score")))
-
-    st.markdown("#### Market environment")
-    st.write(snap.get("environment", "Not available"))
-
-    participants = snap.get("dominant_participants") or {}
-    if participants:
-        rows = []
-        for participant, details in participants.items():
-            details = details or {}
-            rows.append({
-                "Participant": participant.replace("_", " ").title(),
-                "Bias": details.get("bias"),
-                "Pressure": details.get("pressure"),
-            })
-        st.dataframe(
-            pd.DataFrame(rows),
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Pressure": st.column_config.ProgressColumn(
-                    "Pressure", min_value=0, max_value=100, format="%.1f"
-                )
-            },
-        )
-
-    c1, c2 = st.columns(2)
-    with c1:
-        _render_evidence_list("Why the model reached this view", witness.get("evidence"), "success")
-    with c2:
-        _render_evidence_list("What would invalidate it", witness.get("invalidators"), "warning")
-
-
-def render_expectation_explainer(data):
-    snap = data.get("expectation_snapshot") or {}
-    witness = _find_witness(data, "expectation")
-    scores = data.get("scores") or {}
-    _render_witness_header(witness, scores.get("expectation"))
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Market-implied CAGR", _metric_or_dash(snap.get("implied_cagr_pct"), "%"))
-    c2.metric("Revenue Growth", _metric_or_dash(snap.get("revenue_growth_pct"), "%"))
-    c3.metric("CAP Years", _metric_or_dash(snap.get("market_implied_cap_years")))
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("ROIC", _metric_or_dash(snap.get("roic_pct"), "%"))
-    c2.metric("Market-required MEROI", _metric_or_dash(snap.get("meroi_pct"), "%"))
-    c3.metric("Growth Gap", _metric_or_dash(snap.get("growth_gap_pct"), "%"))
-
-    if snap.get("read"):
-        st.info(snap.get("read"))
-
-    c1, c2 = st.columns(2)
-    with c1:
-        _render_evidence_list("Why the model reached this view", witness.get("evidence"), "success")
-    with c2:
-        _render_evidence_list("What would invalidate it", witness.get("invalidators"), "warning")
-
-
-def render_optionality_explainer(data):
-    snap = data.get("optionality_snapshot") or {}
-    witness = _find_witness(data, "optionality")
-    scores = data.get("scores") or {}
-    _render_witness_header(witness, scores.get("optionality"))
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Enterprise Value", compact_number(snap.get("enterprise_value")))
-    c2.metric("Visible Business Value", compact_number(snap.get("existing_business_value")))
-    c3.metric("Future Option Value", compact_number(snap.get("embedded_option_value")))
-
-    c1, c2 = st.columns(2)
-    c1.metric("Existing Value", _metric_or_dash(snap.get("existing_value_pct"), "%"))
-    c2.metric("Future Optionality", _metric_or_dash(snap.get("embedded_optionality_pct"), "%"))
-
-    if snap.get("summary"):
-        st.info(snap.get("summary"))
-
-    c1, c2 = st.columns(2)
-    with c1:
-        _render_evidence_list("Why the model reached this view", witness.get("evidence"), "success")
-    with c2:
-        _render_evidence_list("What would invalidate it", witness.get("invalidators"), "warning")
-
-
-def render_credit_explainer(data):
-    snap = data.get("capital_structure_snapshot") or {}
-    witness = _find_witness(data, "merton")
-    scores = data.get("scores") or {}
-    _render_witness_header(witness, scores.get("merton_credit"))
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Distance to Default", _metric_or_dash(snap.get("distance_to_default"), decimals=2))
-    c2.metric("Annual PD", _metric_or_dash(snap.get("pd_annual_proxy_pct"), "%"))
-    c3.metric("Net Debt / Market Cap", _metric_or_dash(snap.get("net_debt_to_market_cap_pct"), "%"))
-
-    st.info(f"{snap.get('signal', 'Not available')} · Risk: {snap.get('risk', 'n/a')}")
-
-    c1, c2 = st.columns(2)
-    with c1:
-        _render_evidence_list("Why the model reached this view", witness.get("evidence"), "success")
-    with c2:
-        _render_evidence_list("What would invalidate it", witness.get("invalidators"), "warning")
-
-
-def render_committee_explainer(data):
-    reasoning = data.get("reasoning") or {}
-    if not reasoning:
-        st.caption("Committee reasoning is not available.")
-        return
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Committee View", reasoning.get("committee_view", "n/a"))
-    c2.metric("Confidence", _metric_or_dash(reasoning.get("confidence"), "%"))
-    c3.metric(
-        "Consensus",
-        _metric_or_dash((reasoning.get("consensus") or {}).get("agreement_pct"), "%"),
-    )
-
-    decisive = reasoning.get("decisive_factor") or {}
-    if decisive:
-        st.markdown("#### Decisive factor")
-        st.success(
-            f"{str(decisive.get('engine', 'n/a')).replace('_', ' ').title()}: "
-            f"{decisive.get('claim', 'No claim available')}"
-        )
-
-    if reasoning.get("committee_summary"):
-        st.info(reasoning.get("committee_summary"))
-
-    c1, c2 = st.columns(2)
-    with c1:
-        support = [
-            f"{str(x.get('engine', '')).replace('_', ' ').title()} — "
-            f"{x.get('claim', '')} (score {x.get('score', 'n/a')})"
-            for x in reasoning.get("supporting_evidence") or []
-        ]
-        _render_evidence_list("Supporting witnesses", support, "success")
-
-    with c2:
-        contradictions = [
-            f"{str(x.get('engine', '')).replace('_', ' ').title()} — "
-            f"{x.get('claim', '')} (score {x.get('score', 'n/a')})"
-            for x in reasoning.get("contradictory_evidence") or []
-        ]
-        _render_evidence_list("Contradictory witnesses", contradictions, "warning")
-
-    _render_evidence_list("Portfolio-level invalidators", reasoning.get("invalidators"), "warning")
-
-
-def render_explainability_workbench(data):
-    st.markdown("### Understand the Decision")
-    st.caption(
-        "Open an expert panel to see the conclusion, inputs, supporting evidence, "
-        "participant behavior, and invalidation conditions."
-    )
-
-    tabs = st.tabs([
-        "Investment Committee",
-        "Game Theory",
-        "Expectation Investing",
-        "Future Value Premium",
-        "Merton / Credit",
-    ])
-    with tabs[0]:
-        render_committee_explainer(data)
-    with tabs[1]:
-        render_game_theory_explainer(data)
-    with tabs[2]:
-        render_expectation_explainer(data)
-    with tabs[3]:
-        render_optionality_explainer(data)
-    with tabs[4]:
-        render_credit_explainer(data)
-
-
 def render_analysis_card(data):
     if not isinstance(data, dict):
         st.warning("No analysis data returned.")
@@ -1421,7 +1131,6 @@ def render_analysis_card(data):
     render_specialized_engines(data)
     render_bull_bear(data)
     render_engine_scores(data)
-    render_explainability_workbench(data)
 
     with st.expander("Key Reads"):
         reads = data.get("reads") or {}
@@ -1429,8 +1138,7 @@ def render_analysis_card(data):
             if v:
                 st.markdown(f"**{k.replace('_', ' ').title()}:** {v}")
 
-    with st.expander("Advanced: Raw model payload", expanded=False):
-        st.caption("For audit, debugging, and model-development use.")
+    with st.expander("Raw response"):
         st.json(data)
         
 def render_clean_dashboard(df):
