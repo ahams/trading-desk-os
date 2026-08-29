@@ -330,9 +330,9 @@ def optionality_score(
 
     if not np.isnan(roic) and not np.isnan(meroi):
         if roic > meroi:
-            bull_points.append(f"ROIC exceeds market-implied reinvestment hurdle: ROIC {roic:.1f}% vs MEROI {meroi:.1f}%.")
+            bull_points.append(f"ROIC exceeds market-implied reinvestment hurdle: ROIC {fmt_pct(roic)} vs MEROI {fmt_pct(meroi)}.")
         elif roic < meroi * 0.75:
-            bear_points.append(f"ROIC is below market-implied reinvestment hurdle: ROIC {roic:.1f}% vs MEROI {meroi:.1f}%.")
+            bear_points.append(f"ROIC is below market-implied reinvestment hurdle: ROIC {fmt_pct(roic)}  vs MEROI {fmt_pct(meroi)}.")
 
     return score, {
         "score": round(score, 1),

@@ -103,7 +103,7 @@ def apply_theme():
 # =============================================================================
 
 DEFAULT_API_URL = os.getenv("TDOS_API_URL", "http://127.0.0.1:8000")
-DEFAULT_API_KEY = os.getenv("TDOS_API_KEY", "tdo_lQGDF7OVvu4rK1R1cExWR_nEt-PvpWFnkJuLkfbiEaA")
+DEFAULT_API_KEY = os.getenv("TDOS_API_KEY") or os.getenv("STOCK_API_KEY", "")
 
 
 def normalize_base_url(url: str) -> str:
@@ -680,7 +680,7 @@ def render_action_cards(df):
     st.subheader("Action Cards")
     top = df.sort_values("Final Score", ascending=False).head(8)
 
-    for _, row in top.iterrows():
+    for card_idx, (_, row) in enumerate(top.iterrows()):
         ticker = row.get("Ticker", "n/a")
         decision = row.get("Decision", "n/a")
         setup = row.get("Setup", "n/a")
@@ -720,6 +720,20 @@ def render_action_cards(df):
                     "The scanner card is a summary. Open the single-stock analysis "
                     "for witness evidence, participant behavior, assumptions, and invalidators."
                 )
+
+            if st.button(
+                f"Open {ticker} in Analyze →",
+                key=f"scanner_open_analysis_{card_idx}_{ticker}",
+                use_container_width=True,
+            ):
+                st.session_state.analyze_ticker = str(ticker).upper().strip()
+                st.session_state.run_analysis_from_scanner = True
+                # nav_page is the key of the st.radio widget and cannot be
+                # changed after that widget has been instantiated in this run.
+                # Queue the navigation change and apply it at the top of the
+                # next rerun, before st.radio is created.
+                st.session_state.pending_nav_page = "Analyze Stock"
+                st.rerun()
 
 
 # =============================================================================
@@ -1189,7 +1203,73 @@ def _render_evidence_list(title, values, kind="info"):
             st.info(value)
 
 
-def _render_witness_header(witness, fallback_score=None):
+def _classify_expectation_evidence(witness):
+    """
+    Split expectation-engine evidence into supporting evidence, current drawbacks,
+    and true forward-looking invalidators.
+
+    The backend currently returns a single ``evidence`` list, so the frontend
+    performs a conservative presentation-only classification. This avoids
+    displaying current valuation/ROIC weaknesses as positive evidence or as
+    future invalidation conditions.
+    """
+    evidence = [str(x) for x in (witness.get("evidence") or []) if x]
+    invalidators = [str(x) for x in (witness.get("invalidators") or []) if x]
+
+    negative_markers = (
+        "growth hurdle is demanding",
+        "roic is below",
+        "roic below",
+        "below wacc",
+        "below market-required",
+        "below market required",
+        "current roic is below",
+        "current roic below",
+    )
+
+    supporting, drawbacks = [], []
+    for item in evidence:
+        low = item.lower()
+
+        # ROIC vs MEROI is direction-sensitive:
+        # above/exceeds = positive evidence; below = drawback.
+        is_roic_meroi = "roic" in low and "meroi" in low
+        if is_roic_meroi:
+            if any(word in low for word in ("above", "exceeds", "well above", "comfortably exceeds", "materially exceeds")):
+                supporting.append(item)
+                continue
+            if "below" in low:
+                drawbacks.append(item)
+                continue
+
+        if any(marker in low for marker in negative_markers):
+            drawbacks.append(item)
+        else:
+            supporting.append(item)
+
+    # A current condition is not an invalidator.  If the backend repeats a
+    # current ROIC/MEROI weakness under invalidators, move it to drawbacks.
+    true_invalidators = []
+    for item in invalidators:
+        low = item.lower()
+        is_current_drawback = (
+            ("roic" in low and "meroi" in low and "below" in low)
+            or ("roic" in low and "wacc" in low and "below" in low)
+        )
+        if is_current_drawback:
+            if item not in drawbacks:
+                drawbacks.append(item)
+        else:
+            true_invalidators.append(item)
+
+    # De-duplicate while preserving backend order.
+    supporting = list(dict.fromkeys(supporting))
+    drawbacks = list(dict.fromkeys(drawbacks))
+    true_invalidators = list(dict.fromkeys(true_invalidators))
+    return supporting, drawbacks, true_invalidators
+
+
+def _render_witness_header(witness, fallback_score=None, show_claim=True):
     score = witness.get("score", fallback_score)
     direction = witness.get("direction", "neutral")
     confidence = witness.get("confidence")
@@ -1205,8 +1285,15 @@ def _render_witness_header(witness, fallback_score=None):
     c4.metric("Committee Strength", _metric_or_dash(strength, decimals=3))
 
     claim = witness.get("claim")
-    if claim:
+    if show_claim and claim:
         st.info(claim)
+
+
+def _escape_markdown_dollars(value):
+    """Prevent monetary $ signs from being interpreted as LaTeX delimiters."""
+    if value is None:
+        return value
+    return str(value).replace("$", r"\$")
 
 
 def compact_number(value):
@@ -1271,7 +1358,7 @@ def render_expectation_explainer(data):
     snap = data.get("expectation_snapshot") or {}
     witness = _find_witness(data, "expectation")
     scores = data.get("scores") or {}
-    _render_witness_header(witness, scores.get("expectation"))
+    _render_witness_header(witness, scores.get("expectation"), show_claim=False)
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Market-implied CAGR", _metric_or_dash(snap.get("implied_cagr_pct"), "%"))
@@ -1286,18 +1373,23 @@ def render_expectation_explainer(data):
     if snap.get("read"):
         st.info(snap.get("read"))
 
+    supporting, drawbacks, invalidators = _classify_expectation_evidence(witness)
+
+    st.markdown("#### Why the model reached this view")
     c1, c2 = st.columns(2)
     with c1:
-        _render_evidence_list("Why the model reached this view", witness.get("evidence"), "success")
+        _render_evidence_list("Supporting evidence", supporting, "success")
     with c2:
-        _render_evidence_list("What would invalidate it", witness.get("invalidators"), "warning")
+        _render_evidence_list("Current drawbacks / valuation hurdles", drawbacks, "warning")
+
+    _render_evidence_list("What would invalidate the thesis", invalidators, "error")
 
 
 def render_optionality_explainer(data):
     snap = data.get("optionality_snapshot") or {}
     witness = _find_witness(data, "optionality")
     scores = data.get("scores") or {}
-    _render_witness_header(witness, scores.get("optionality"))
+    _render_witness_header(witness, scores.get("optionality"), show_claim=False)
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Enterprise Value", compact_number(snap.get("enterprise_value")))
@@ -1309,7 +1401,7 @@ def render_optionality_explainer(data):
     c2.metric("Future Optionality", _metric_or_dash(snap.get("embedded_optionality_pct"), "%"))
 
     if snap.get("summary"):
-        st.info(snap.get("summary"))
+        st.info(_escape_markdown_dollars(snap.get("summary")))
 
     c1, c2 = st.columns(2)
     with c1:
@@ -1338,6 +1430,144 @@ def render_credit_explainer(data):
         _render_evidence_list("What would invalidate it", witness.get("invalidators"), "warning")
 
 
+def _committee_engine_label(engine):
+    labels = {
+        "fundamental": "Fundamentals",
+        "expectation": "Market Expectations",
+        "optionality": "Future Value / Optionality",
+        "technical": "Technical Setup",
+        "trend_quality": "Trend Quality",
+        "entry_quality": "Entry Quality",
+        "leadership": "Market Leadership",
+        "liquidity": "Liquidity",
+        "options": "Options Positioning",
+        "game": "Game Theory / Participant Behaviour",
+        "game_theory": "Game Theory / Participant Behaviour",
+        "merton": "Balance Sheet / Credit",
+        "merton_credit": "Balance Sheet / Credit",
+        "neocloud": "Greenfield / Capacity",
+        "catalyst": "Catalysts",
+    }
+    key = str(engine or "").lower()
+    return labels.get(key, key.replace("_", " ").title() or "Other")
+
+
+def _committee_relevance(engine, data):
+    """Decision relevance, distinct from raw model confidence/strength.
+
+    Healthy credit is usually confirming evidence for an equity decision rather
+    than the primary reason to own the stock. Credit relevance rises sharply
+    when balance-sheet risk is actually material.
+    """
+    key = str(engine or "").lower()
+    base = {
+        "fundamental": 1.00,
+        "expectation": 1.00,
+        "optionality": 0.85,
+        "technical": 0.80,
+        "trend_quality": 0.80,
+        "entry_quality": 0.75,
+        "leadership": 0.75,
+        "liquidity": 0.70,
+        "options": 0.70,
+        "game": 0.70,
+        "game_theory": 0.70,
+        "catalyst": 0.65,
+        "neocloud": 0.55,
+        "merton": 0.40,
+        "merton_credit": 0.40,
+    }.get(key, 0.60)
+
+    if key in {"merton", "merton_credit"}:
+        cap = data.get("capital_structure_snapshot") or {}
+        score = as_float(cap.get("score"), 100.0)
+        risk = str(cap.get("risk") or "").lower()
+        signal = str(cap.get("signal") or "").lower()
+        material_risk = (
+            score < 60
+            or any(token in risk for token in ("high", "elevated", "distress"))
+            or any(token in signal for token in ("high risk", "distress", "deteriorat"))
+        )
+        if material_risk:
+            return 1.00
+    return base
+
+
+def _committee_rank_items(items, data):
+    ranked = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        engine = item.get("engine")
+        raw_strength = item.get("strength")
+        if raw_strength is None:
+            score = as_float(item.get("score"), 50.0)
+            raw_strength = abs(score - 50.0) / 50.0
+        relevance = _committee_relevance(engine, data)
+        decision_weight = as_float(raw_strength, 0.0) * relevance
+        enriched = dict(item)
+        enriched["decision_relevance"] = relevance
+        enriched["decision_weight"] = decision_weight
+        ranked.append(enriched)
+    return sorted(ranked, key=lambda x: x.get("decision_weight", 0.0), reverse=True)
+
+
+def _committee_expectation_constraint(data):
+    snap = data.get("expectation_snapshot") or {}
+    implied = snap.get("implied_cagr_pct")
+    growth = snap.get("revenue_growth_pct")
+    roic = snap.get("roic_pct")
+    meroi = snap.get("meroi_pct")
+
+    concerns = []
+    try:
+        if implied is not None and growth is not None and float(implied) > float(growth):
+            concerns.append(
+                f"market-implied growth of {float(implied):.1f}% exceeds current revenue growth of {float(growth):.1f}%"
+            )
+    except Exception:
+        pass
+    try:
+        if roic is not None and meroi is not None and float(roic) < float(meroi):
+            concerns.append(
+                f"ROIC of {float(roic):.1f}% remains below the market-required MEROI of {float(meroi):.1f}%"
+            )
+    except Exception:
+        pass
+
+    if not concerns:
+        return None
+    return "Valuation remains the principal hurdle: " + "; and ".join(concerns) + "."
+
+
+def _committee_assessment_text(data, reasoning, primary, support_ranked, contradictions):
+    ticker = str(data.get("ticker") or "the company")
+    view = str(reasoning.get("committee_view") or "the current view")
+    primary_label = _committee_engine_label(primary.get("engine")) if primary else "cross-engine evidence"
+
+    confirming = []
+    for item in support_ranked:
+        label = _committee_engine_label(item.get("engine"))
+        if label != primary_label and label not in confirming:
+            confirming.append(label)
+        if len(confirming) == 2:
+            break
+
+    sentence = f"The committee maintains a {view.lower()} on {ticker}. The assessment is driven primarily by {primary_label}."
+    if confirming:
+        sentence += " The view is reinforced by " + " and ".join(confirming) + "."
+
+    cap = data.get("capital_structure_snapshot") or {}
+    merton_score = as_float(cap.get("score"), 0.0)
+    merton_risk = str(cap.get("risk") or "").lower()
+    if merton_score >= 70 and not any(x in merton_risk for x in ("high", "elevated", "distress")):
+        sentence += " Balance-sheet risk is not currently a material constraint on the equity thesis."
+
+    if contradictions:
+        sentence += " The committee nevertheless identifies material counter-evidence that should be monitored."
+    return sentence
+
+
 def render_committee_explainer(data):
     reasoning = data.get("reasoning") or {}
     if not reasoning:
@@ -1348,40 +1578,101 @@ def render_committee_explainer(data):
     c1.metric("Committee View", reasoning.get("committee_view", "n/a"))
     c2.metric("Confidence", _metric_or_dash(reasoning.get("confidence"), "%"))
     c3.metric(
-        "Consensus",
+        "Committee Agreement",
         _metric_or_dash((reasoning.get("consensus") or {}).get("agreement_pct"), "%"),
     )
 
-    decisive = reasoning.get("decisive_factor") or {}
-    if decisive:
-        st.markdown("#### Decisive factor")
+    support_ranked = _committee_rank_items(reasoning.get("supporting_evidence"), data)
+    contradiction_ranked = _committee_rank_items(reasoning.get("contradictory_evidence"), data)
+    primary = support_ranked[0] if support_ranked else {}
+
+    st.markdown("#### Committee Assessment")
+    st.info(
+        _committee_assessment_text(
+            data, reasoning, primary, support_ranked, contradiction_ranked
+        )
+    )
+
+    st.markdown("#### Decision Drivers")
+    if primary:
         st.success(
-            f"{str(decisive.get('engine', 'n/a')).replace('_', ' ').title()}: "
-            f"{decisive.get('claim', 'No claim available')}"
+            f"**Primary driver — {_committee_engine_label(primary.get('engine'))}:** "
+            f"{primary.get('claim', 'No supporting claim available.')}"
         )
 
-    if reasoning.get("committee_summary"):
-        st.info(reasoning.get("committee_summary"))
+    confirmations = []
+    for item in support_ranked[1:]:
+        engine = str(item.get("engine") or "").lower()
+        label = _committee_engine_label(engine)
+        # Healthy Merton belongs here as confirmation, not as an automatic primary driver.
+        role = "Financial resilience" if engine in {"merton", "merton_credit"} else label
+        confirmations.append(f"**{role}:** {item.get('claim', '')}")
+        if len(confirmations) == 3:
+            break
+    if confirmations:
+        for line in confirmations:
+            st.write(f"• {line}")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        support = [
-            f"{str(x.get('engine', '')).replace('_', ' ').title()} — "
-            f"{x.get('claim', '')} (score {x.get('score', 'n/a')})"
-            for x in reasoning.get("supporting_evidence") or []
-        ]
-        _render_evidence_list("Supporting witnesses", support, "success")
+    st.markdown("#### Principal Concern")
+    expectation_constraint = _committee_expectation_constraint(data)
+    if expectation_constraint:
+        st.warning(expectation_constraint)
+    elif contradiction_ranked:
+        concern = contradiction_ranked[0]
+        st.warning(
+            f"{_committee_engine_label(concern.get('engine'))}: "
+            f"{concern.get('claim', 'Material counter-evidence is present.')}"
+        )
+    else:
+        context = reasoning.get("context_evidence") or []
+        if context:
+            top_context = context[0]
+            st.warning(
+                f"Monitor {_committee_engine_label(top_context.get('engine'))}: "
+                f"{top_context.get('claim', 'the setup remains incomplete.')}"
+            )
+        else:
+            st.caption("No dominant portfolio constraint is currently identified.")
 
-    with c2:
-        contradictions = [
-            f"{str(x.get('engine', '')).replace('_', ' ').title()} — "
-            f"{x.get('claim', '')} (score {x.get('score', 'n/a')})"
-            for x in reasoning.get("contradictory_evidence") or []
-        ]
-        _render_evidence_list("Contradictory witnesses", contradictions, "warning")
+    st.markdown("#### Portfolio Conclusion")
+    view = str(reasoning.get("committee_view") or "Current view")
+    if expectation_constraint:
+        st.write(
+            f"**{view}, but valuation-sensitive.** Maintain the current bias only while operating evidence "
+            "continues to support the expectations embedded in the valuation and the tactical risk framework remains intact."
+        )
+    else:
+        st.write(
+            f"**{view}.** The balance of specialist evidence supports the current stance, while position sizing, "
+            "entry quality, and thesis invalidation levels should govern execution."
+        )
 
-    _render_evidence_list("Portfolio-level invalidators", reasoning.get("invalidators"), "warning")
+    if contradiction_ranked:
+        st.markdown("#### Counter-evidence")
+        for item in contradiction_ranked[:4]:
+            st.warning(
+                f"{_committee_engine_label(item.get('engine'))}: "
+                f"{item.get('claim', '')}"
+            )
 
+    invalidators = reasoning.get("invalidators") or []
+    _render_evidence_list("What would change the committee view", invalidators, "warning")
+
+    # Keep implementation details available for audit without exposing them in the investment narrative.
+    if reasoning.get("shadow_mode") or reasoning.get("legacy_decision"):
+        with st.expander("Advanced: Committee model audit", expanded=False):
+            st.write("Production verdict:", reasoning.get("legacy_decision", "n/a"))
+            st.write("Committee shadow view:", reasoning.get("committee_view", "n/a"))
+            st.write("Effective decision:", reasoning.get("effective_decision", "n/a"))
+            st.write("Shadow mode:", bool(reasoning.get("shadow_mode")))
+            backend_decisive = reasoning.get("decisive_factor") or {}
+            if backend_decisive:
+                st.write(
+                    "Backend-selected decisive witness:",
+                    f"{_committee_engine_label(backend_decisive.get('engine'))} — {backend_decisive.get('claim', '')}",
+                )
+            if reasoning.get("committee_summary"):
+                st.caption(reasoning.get("committee_summary"))
 
 def render_explainability_workbench(data):
     st.markdown("### Understand the Decision")
@@ -1544,15 +1835,33 @@ st.sidebar.caption("Tip: set TDOS_API_URL and TDOS_API_KEY in Railway variables 
 st.title("📈 Trading Desk OS Beta")
 st.caption("Multi-factor trade decision engine: regime, theme, fundamentals, technicals, liquidity, options, game theory, Merton credit,  Greenfield ARR / Capacity Valuation, and expected return.")
 
-account_tab, analyze_tab, scanner_tab, report_tab = st.tabs(["Account", "Analyze Stock",
-                                                             "Scanner", "Daily Report"]) #, history_tab,, "Signal History"
+# Stateful navigation is used instead of st.tabs so the Scanner can send a
+# selected ticker directly to Analyze Stock and activate that view.
+if "nav_page" not in st.session_state:
+    st.session_state.nav_page = "Account"
+if "analyze_ticker" not in st.session_state:
+    st.session_state.analyze_ticker = "NVDA"
+
+# Apply queued navigation BEFORE the nav widget is instantiated.
+# This avoids StreamlitAPIException when Scanner sends a ticker to Analyze.
+pending_nav_page = st.session_state.pop("pending_nav_page", None)
+if pending_nav_page:
+    st.session_state.nav_page = pending_nav_page
+
+nav_page = st.radio(
+    "Desk navigation",
+    ["Account", "Analyze Stock", "Scanner", "Daily Report"],
+    horizontal=True,
+    key="nav_page",
+    label_visibility="collapsed",
+)
 
 
 # =============================================================================
 # Account
 # =============================================================================
 
-with account_tab:
+if nav_page == "Account":
     st.header("Account & Usage")
     if st.button("Refresh Account", use_container_width=False):
         ok, resp = api_request("GET", "/api/v1/account")
@@ -1576,14 +1885,17 @@ with account_tab:
 # Analyze Stock
 # =============================================================================
 
-with analyze_tab:
+if nav_page == "Analyze Stock":
     st.header("Analyze Stock")
     c1, c2, c3 = st.columns([2, 1, 1])
-    ticker = c1.text_input("Ticker", value="NVDA").upper().strip()
+    ticker = c1.text_input("Ticker", key="analyze_ticker").upper().strip()
     persist_signal = c2.checkbox("Persist signal", value=True)
     raw_mode = c3.checkbox("Show raw only", value=False)
 
-    if st.button("Analyze", type="primary", use_container_width=True):
+    manual_analyze = st.button("Analyze", type="primary", use_container_width=True)
+    scanner_analyze = bool(st.session_state.pop("run_analysis_from_scanner", False))
+
+    if manual_analyze or scanner_analyze:
         if not ticker:
             st.warning("Enter a ticker")
         else:
@@ -1596,19 +1908,27 @@ with analyze_tab:
                 )
             if ok:
                 data = extract_data(resp)
-                if raw_mode:
-                    st.json(resp)
-                else:
-                    render_analysis_card(data)
+                st.session_state.analysis_data = data
+                st.session_state.analysis_raw_response = resp
+                st.session_state.analysis_data_ticker = ticker
             else:
                 show_error(resp)
+
+    # Persist the last detailed analysis across normal Streamlit reruns.
+    saved_data = st.session_state.get("analysis_data")
+    saved_ticker = st.session_state.get("analysis_data_ticker")
+    if isinstance(saved_data, dict) and saved_ticker == ticker:
+        if raw_mode:
+            st.json(st.session_state.get("analysis_raw_response", saved_data))
+        else:
+            render_analysis_card(saved_data)
 
 
 # =============================================================================
 # Scanner
 # =============================================================================
 
-with scanner_tab:
+if nav_page == "Scanner":
     st.header("Stock Scanner")
 
     c1, c2, c3 = st.columns([3, 1, 1])
@@ -1665,23 +1985,30 @@ with scanner_tab:
                     st.warning("Scanner returned no rows.")
                     st.json(resp)
                 else:
-                    render_metric_strip(df)
-                    render_opportunity_matrix(df)
-                    render_theme_heatmap(df)
-                    render_action_cards(df)
-                    render_risk_radar(df)
-
-                    with st.expander("Full Desk Blotter"):
-                        render_scanner_tables(df)
+                    st.session_state.scanner_df = df
+                    st.session_state.scanner_raw_response = resp
             else:
                 show_error(resp)
+
+    # Keep scanner results visible after reruns (including after returning from
+    # a detailed single-stock analysis).
+    df = st.session_state.get("scanner_df")
+    if isinstance(df, pd.DataFrame) and not df.empty:
+        render_metric_strip(df)
+        render_opportunity_matrix(df)
+        render_theme_heatmap(df)
+        render_action_cards(df)
+        render_risk_radar(df)
+
+        with st.expander("Full Desk Blotter"):
+            render_scanner_tables(df)
 
 
 # =============================================================================
 # Daily Report
 # =============================================================================
 
-with report_tab:
+if nav_page == "Daily Report":
     st.header("Daily Report")
 
     c1, c2 = st.columns([3, 1])
