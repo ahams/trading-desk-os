@@ -3,7 +3,7 @@ import io, os, requests
 from typing import List, Optional
 import pandas as pd
 import yfinance as yf
-import streamlit as st
+# import streamlit as st
 from utils import logger
 
 DEFAULT_UNIVERSES = {
@@ -12,7 +12,7 @@ DEFAULT_UNIVERSES = {
     'Liquid Momentum': ['PLTR','COIN','MSTR','SOFI','HOOD','ARM','TSM','CRWD','NET','RBLX','U','SHOP'],
 }
 
-@st.cache_data(ttl=3600, show_spinner=False)
+# @st.cache_data(ttl=3600, show_spinner=False)
 def load_universe(name: str) -> list[str]:
     if name in DEFAULT_UNIVERSES: return DEFAULT_UNIVERSES[name]
     if name == 'S&P 500':
@@ -39,7 +39,7 @@ def parse_tickers(manual: str='', csv_file=None, universe: Optional[str]=None) -
         tickers += df[col].dropna().astype(str).str.upper().str.replace('.','-', regex=False).tolist()
     return sorted(set(tickers))
 
-@st.cache_data(ttl=900, show_spinner=False)
+# @st.cache_data(ttl=900, show_spinner=False)
 def get_ohlcv(ticker: str, period='1y', interval='1d') -> pd.DataFrame:
     try:
         df = yf.download(ticker, period=period, interval=interval, auto_adjust=True, progress=False, threads=False)
@@ -50,13 +50,36 @@ def get_ohlcv(ticker: str, period='1y', interval='1d') -> pd.DataFrame:
     except Exception as e:
         logger.warning('OHLCV failed %s: %s', ticker, e); return pd.DataFrame()
 
-@st.cache_data(ttl=3600, show_spinner=False)
+# @st.cache_data(ttl=3600, show_spinner=False)
 def get_info(ticker: str) -> dict:
-    try: return yf.Ticker(ticker).get_info() or {}
-    except Exception as e:
-        logger.warning('info failed %s: %s', ticker, e); return {}
+    try:
+        tk = yf.Ticker(ticker)
+        info = tk.get_info() or {}
 
-@st.cache_data(ttl=1800, show_spinner=False)
+        logger.warning(
+            "GET_INFO %s: %d keys | "
+            "symbol=%s marketCap=%s enterpriseValue=%s "
+            "revenueGrowth=%s totalRevenue=%s",
+            ticker,
+            len(info),
+            info.get("symbol"),
+            info.get("marketCap"),
+            info.get("enterpriseValue"),
+            info.get("revenueGrowth"),
+            info.get("totalRevenue"),
+        )
+
+        return info
+
+    except Exception as e:
+        logger.exception(
+            "GET_INFO FAILED %s: %s",
+            ticker,
+            e,
+        )
+        return {}
+
+# @st.cache_data(ttl=1800, show_spinner=False)
 def get_options_chain(ticker: str):
     try:
         tk = yf.Ticker(ticker); expiries = list(tk.options)
@@ -66,7 +89,7 @@ def get_options_chain(ticker: str):
     except Exception as e:
         logger.warning('options failed %s: %s', ticker, e); return None, pd.DataFrame(), pd.DataFrame()
 
-@st.cache_data(ttl=1800, show_spinner=False)
+# @st.cache_data(ttl=1800, show_spinner=False)
 def get_news(ticker: str, limit=8) -> list[dict]:
     # yfinance news is unstable but useful as a free fallback.
     try:
