@@ -16,6 +16,13 @@ from database.store import init_db, record_request
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 logger = logging.getLogger("trading_desk.api")
 
+from config.settings import settings
+
+print("=" * 60)
+print("Database :", settings.db_path)
+print("Admin Key:", settings.admin_bootstrap_key)
+print("=" * 60)
+
 app = FastAPI(
     title=settings.app_name,
     version="1.0.0",
