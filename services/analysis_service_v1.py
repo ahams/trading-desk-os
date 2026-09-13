@@ -30,7 +30,7 @@ from database.store import connect, init_db, utc_now
 from engines.trend_quality_engine import analyze_trend_quality
 from engines.entry_quality_engine import analyze_entry_quality
 from engines.leadership_engine import analyze_leadership
-
+from decision_layer import build_reasoning
 try:
     from engines.optionality_engine import optionality_score
 except Exception as e:
@@ -437,9 +437,34 @@ def analyze_stock(
             "optionality": optionality_meta,
         },
     }
+    # safe = _json_safe(result)
+    # if persist_signal and not safe.get("error"):
+    #     save_signal(safe)
+    # return safe
+# ============================================================
+# Decision Committee / Explainability Layer
+# ============================================================
+
+    try:
+        result["reasoning"] = build_reasoning(result)
+    except Exception as exc:
+        logger.exception(
+            "Decision committee failed for %s",
+            ticker,
+        )
+
+        result["reasoning"] = {
+            "enabled": False,
+            "status": "error",
+            "error": str(exc),
+        }
+
+
     safe = _json_safe(result)
+
     if persist_signal and not safe.get("error"):
         save_signal(safe)
+
     return safe
 
 

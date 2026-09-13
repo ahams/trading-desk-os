@@ -488,18 +488,83 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
             "optionality": optionality_meta.get("summary"),
         },
         
-        "expectation_snapshot": {
-            "score": _round(scores.get("expectation"), 1),
-            "read": expected_meta.get("expectation_read") or summary.get("expectation"),
-            "expectations_gap": _round((metas.get("expectation") or {}).get("expectations_gap"), 1),
-            "implied_cagr": _round((metas.get("expectation") or {}).get("implied_cagr"), 1),
-            "revenue_growth": _round((metas.get("expectation") or {}).get("revenue_growth"), 1),
-            "market_implied_cap": (metas.get("expectation") or {}).get("market_implied_cap"),
-            "roic": _round((metas.get("expectation") or {}).get("roic"), 1),
-            "meroi": _round((metas.get("expectation") or {}).get("meroi"), 1),
-            "signal": (metas.get("expectation") or {}).get("signal"),
+        # "expectation_snapshot": {
+        #     "score": _round(scores.get("expectation"), 1),
+        #     "read": expected_meta.get("expectation_read") or summary.get("expectation"),
+        #     "expectations_gap": _round((metas.get("expectation") or {}).get("expectations_gap"), 1),
+        #     "implied_cagr": _round((metas.get("expectation") or {}).get("implied_cagr"), 1),
+        #     "revenue_growth": _round((metas.get("expectation") or {}).get("revenue_growth"), 1),
+        #     "market_implied_cap": (metas.get("expectation") or {}).get("market_implied_cap"),
+        #     "roic": _round((metas.get("expectation") or {}).get("roic"), 1),
+        #     "meroi": _round((metas.get("expectation") or {}).get("meroi"), 1),
+        #     "signal": (metas.get("expectation") or {}).get("signal"),
             
-        },  
+        # }, 
+        "expectation_snapshot": {
+    "score": _round(scores.get("expectation"), 1),
+
+    "signal": expected_meta.get("signal"),
+
+    "read": (
+        expected_meta.get("expectation_read")
+        or summary.get("expectation")
+    ),
+
+    "implied_cagr_pct": _pct(
+        expected_meta.get("implied_cagr")
+    ),
+
+    "revenue_growth_pct": _pct(
+        expected_meta.get("revenue_growth")
+    ),
+
+    "market_implied_cap_years": _round(
+        expected_meta.get("market_implied_cap"),
+        1,
+    ),
+
+    "roic_pct": _pct(
+        expected_meta.get("roic")
+    ),
+
+    "meroi_pct": _pct(
+        expected_meta.get("meroi")
+    ),
+
+    "growth_gap_pct": _pct(
+        (
+            expected_meta.get("revenue_growth")
+            - expected_meta.get("implied_cagr")
+        )
+        if (
+            expected_meta.get("revenue_growth") is not None
+            and expected_meta.get("implied_cagr") is not None
+        )
+        else None
+    ),
+
+    "roic_gap_pct": _pct(
+        (
+            expected_meta.get("roic")
+            - expected_meta.get("meroi")
+        )
+        if (
+            expected_meta.get("roic") is not None
+            and expected_meta.get("meroi") is not None
+        )
+        else None
+    ),
+
+    "expectation_hurdle": _round(
+        expected_meta.get("expectation_hurdle"),
+        1,
+    ),
+
+    "expectations_gap": _round(
+        expected_meta.get("expectations_gap"),
+        1,
+    ),
+}, 
         "options_snapshot": {
             "expiry": options_meta.get("expiry"),
             "put_call_oi": _round(options_meta.get("put_call_oi"), 2),
@@ -545,6 +610,7 @@ def compact_analysis(result: Dict[str, Any]) -> Dict[str, Any]:
             "bull_points": optionality_meta.get("bull_points") or [],
             "bear_points": optionality_meta.get("bear_points") or [],
         },
+        "reasoning": result.get("reasoning") or {},
         "final_thesis": result.get("thesis"),
     }
     
